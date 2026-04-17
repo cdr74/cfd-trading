@@ -1,0 +1,18 @@
+forex:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - EURGBP
+
+indices:
+  - US500
+  - DE40
+  - UK100
+
+commodities:
+  - GOLD
+  - XBRUSD
+
+crypto:
+  - BTCUSD
+  - ETHUSD

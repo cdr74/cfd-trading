@@ -1,0 +1,28 @@
+name: momentum
+description: Trend-following strategy targeting breakouts with trailing stop management
+
+entry:
+  min_size: 0.1
+  max_size: 5.0
+
+risk:
+  stop_loss:
+    type: HARD
+    default_pct: 2.0
+    max_pct: 5.0
+  trailing_stop:
+    enabled: true
+    min_distance_pct: 0.5
+    max_distance_pct: 3.0
+    update_interval_min: 1
+  take_profit:
+    dynamic: true
+    min_rr_ratio: 1.5
+    max_pct: 10.0
+  position_scaling:
+    enabled: true
+    max_adds: 2
+    max_total_size: 10.0
+  time_exit:
+    enabled: true
+    close_minutes_before_session_end: 30

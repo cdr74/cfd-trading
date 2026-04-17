@@ -1,0 +1,5 @@
+global:
+  max_loss_pct_per_trade: 5.0      # hard ceiling — never exceed
+  margin_floor_pct: 20.0           # halt all trading below this
+  max_open_positions: 3
+  session_end_close: true

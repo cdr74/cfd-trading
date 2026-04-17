@@ -1,0 +1,26 @@
+# Environment
+.env
+.env.local
+
+# Data (never commit trading state or credentials)
+data/
+*.db
+*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
