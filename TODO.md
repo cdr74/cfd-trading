@@ -49,8 +49,8 @@ Foundation for all other components. Everything writes here.
 
 Thin wrapper re-exporting `CapitalClient`. Validates all needed API calls work against demo.
 
-- [x] `broker/capital_client.py` — re-exports `CapitalClient`; import confirmed working
-- [x] `pyproject.toml` — `capital-com-mcp-server @ file:///home/chris/dev/capital-mcp-server` added
+- [x] `broker/capital_client.py` — re-exports `CapitalClient` from `capital-com-client`; import confirmed working
+- [x] `pyproject.toml` — `capital-com-mcp-server` declared as dependency (installed from GitHub checkout in CI)
 - [x] `tests/integration/conftest.py` — loads .env from local or capital-mcp-server fallback
 - [x] Integration tests — `tests/integration/test_broker.py` — 7 tests passing against demo API
   - [x] authenticate, ping, get_account_info, get_prices, get_positions, get_client_sentiment, get_historical_prices

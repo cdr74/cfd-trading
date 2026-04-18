@@ -1,5 +1,5 @@
-"""Thin wrapper re-exporting CapitalClient from the capital-mcp-server package."""
+"""Thin wrapper re-exporting CapitalClient from the capital-com-client package."""
 
-from capital_client import CapitalClient
+from capital_com_client import CapitalClient
 
 __all__ = ["CapitalClient"]

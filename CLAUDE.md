@@ -33,14 +33,14 @@ pytest tests/unit/ -v
 
 **What needs unit tests:**
 - `risk/preflight.py` — every validation rule, every edge case, every rejection path
-- `agent/output_parser.py` — valid JSON, schema violations, missing required fields
-- `agent/prompt_builder.py` — correct assembly of system + user messages from strategy files
+- `monitor/monitor.py` — rule evaluation logic for every rule type and priority order
 - `strategy/loader.py` — valid strategies load correctly, invalid YAML fails loudly, missing MD file is caught
 - `storage/repository.py` — CRUD operations against an in-memory SQLite instance
+- `tools/` — each MCP tool with mocked CapitalClient
 - Any utility function with non-trivial logic
 
 **Unit test principles:**
-- No network calls. Mock `CapitalClient` and the Anthropic SDK.
+- No network calls. Mock `CapitalClient`.
 - No file system side effects. Use `tmp_path` fixtures for anything that writes files.
 - Tests must be fast — the full unit suite should run in under 30 seconds.
 - Test the failure paths as thoroughly as the happy path.
@@ -63,9 +63,10 @@ pytest tests/integration/ -m integration -v
 pytest tests/integration/ -m trade -v   # only when explicitly testing execution
 ```
 
-**GitHub Actions workflow** (`.github/workflows/integration.yml`):
-- Trigger: push to any branch
-- Runs: `pytest tests/integration/ -m integration`
+**GitHub Actions workflow** (`.github/workflows/ci.yml`):
+- Trigger: push/PR to any branch
+- `unit-tests` job: `pytest tests/unit/ -v` — always runs, no credentials needed
+- `integration-tests` job: `pytest tests/integration/ -m integration -v` — runs after unit-tests, uses demo API secrets
 - Trade-marked tests are excluded from CI — they require manual run
 - Secrets required: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
 
@@ -108,7 +109,7 @@ Verify `validate_proposal` correctly accepts a valid proposal and rejects one th
 Verify `execute_trade` opens a real position on the demo account. Confirm the deal appears in Capital.com and in the local SQLite DB.
 
 ### SM-06 — Monitor Cycle
-Verify `monitor.py` runs at the configured interval. Confirm it fetches live positions, calls Claude, and writes a reasoning trace to the DB. Observe at least one HOLD decision.
+Verify `monitor.py` runs at the configured interval. Confirm it fetches live positions, evaluates rules, and writes a cycle snapshot to the DB. Observe at least one HOLD decision in the logs.
 
 ### SM-07 — Session End (close)
 Verify `end_session(close_positions=True)` stops the monitor, closes all open positions, and writes the session summary.

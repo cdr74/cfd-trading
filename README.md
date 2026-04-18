@@ -23,7 +23,7 @@ An AI-driven CFD trading system using Anthropic Claude as the core reasoning and
 |-----------|-----------|------|
 | Claude Code / Claude Desktop | Anthropic Claude Code | Human-facing conversational UI — drives the session phase by phase, presents proposals, holds conversation context |
 | cfd-trading MCP server | Python, FastMCP (this repo) | Exposes session, scan, and trade tools to Claude Code; houses preflight, storage, monitor subprocess management |
-| Capital.com client | Python (`CapitalClient` from capital-mcp-server, imported directly) | Market data, trade execution, account/position queries |
+| Capital.com client | Python (`CapitalClient` from `capital-com-client`, imported directly) | Market data, trade execution, account/position queries |
 | Monitor process | Python (`monitor.py`) | Autonomous position management loop; runs as subprocess during active session only (v1) |
 | State / Audit | SQLite + JSONL | Trade history, cycle snapshots, reasoning traces, audit log |
 | Strategy config | YAML + Markdown | Risk bounds (YAML) and prompt modules (MD) per strategy — pluggable, no code changes needed to add a strategy |
@@ -39,7 +39,7 @@ Human → Claude Code (outer Claude)           monitor.py (background, every 60s
   │                                            │
   ├─ calls scan_markets tool                   ├─ CapitalClient.get_positions()
   │    └─ CapitalClient fetches data           ├─ CapitalClient.get_prices()
-  │    └─ returns ranked instruments           ├─ Anthropic SDK (inner Claude call)
+  │    └─ returns ranked instruments           ├─ rule engine (strategy YAML)
   │                                            │    └─ HOLD / ADJUST / CLOSE
   ├─ Claude reasons, human selects            ├─ preflight.py (within risk bounds?)
   │                                            ├─ CapitalClient.update/close_position()
@@ -60,7 +60,7 @@ Human → Claude Code (outer Claude)           monitor.py (background, every 60s
        └─ repository.py (trade log)
 ```
 
-**Key distinction:** In the entry flow, the outer Claude (Claude Code) does all reasoning. No inner Anthropic API call is made. In the monitor flow, an inner Anthropic API call is made inside `monitor.py` because no human is present.
+**Key distinction:** In the entry flow, Claude Code does all reasoning. In the monitor flow, `monitor.py` evaluates strategy YAML rules mechanically — no AI call is made. Claude Code is the only reasoning engine in the system.
 
 ---
 
