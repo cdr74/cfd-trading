@@ -25,154 +25,128 @@ Status markers: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ---
 
-## Phase 1 — Storage Layer
+## Phase 1 — Storage Layer ✓
 
 Foundation for all other components. Everything writes here.
 
-- [ ] `storage/db.py`
-  - [ ] SQLite connection management (path from env or default `./data/trading.db`)
-  - [ ] Schema creation: `cycle_snapshots`, `trades`, `reasoning_traces`
-  - [ ] `init_db()` — idempotent, safe to call on every startup
-- [ ] `storage/repository.py`
-  - [ ] `save_cycle_snapshot(cycle_id, asset, strategy, account_bal, positions, market_data)`
-  - [ ] `save_trade(cycle_id, asset, direction, size, entry_price, stop_loss, take_profit, broker_ref)` → status: PROPOSED
-  - [ ] `update_trade_status(trade_id, status)` — APPROVED / REJECTED / EXECUTED / FAILED
-  - [ ] `save_reasoning_trace(cycle_id, prompt_tokens, output_tokens, reasoning, tool_calls)`
-  - [ ] `get_open_trades()` → used by session start and monitor
-  - [ ] `get_session_summary(session_id)` → P&L, win rate, max drawdown
-- [ ] Unit tests — `tests/unit/test_repository.py`
-  - [ ] All CRUD operations against in-memory SQLite (`":memory:"`)
-  - [ ] Status transition tests
-  - [ ] Summary calculation tests
+- [x] `storage/db.py`
+  - [x] SQLite connection management (path from env or default `./data/trading.db`)
+  - [x] Schema creation: `sessions`, `cycle_snapshots`, `trades`, `reasoning_traces`
+  - [x] `init_db()` — idempotent, safe to call on every startup
+- [x] `storage/repository.py`
+  - [x] `create_session()` → session_id UUID; `close_session(session_id, summary)`
+  - [x] `save_cycle_snapshot(session_id, asset, strategy, account_bal, positions, market_data)`
+  - [x] `save_trade(session_id, cycle_id, asset, direction, size, entry_price, stop_loss, take_profit, broker_ref)` → status: PROPOSED
+  - [x] `update_trade_status(trade_id, status)` — APPROVED / REJECTED / EXECUTED / FAILED
+  - [x] `save_reasoning_trace(session_id, cycle_id, prompt_tokens, output_tokens, reasoning, tool_calls)`
+  - [x] `get_open_trades()` → used by session start and monitor
+  - [x] `get_session_summary(session_id)` → trade counts (P&L/win-rate filled at session end from broker data)
+- [x] Unit tests — `tests/unit/test_repository.py` — 12 tests, all passing
 
 ---
 
-## Phase 2 — Broker Wrapper
+## Phase 2 — Broker Wrapper ✓
 
 Thin wrapper re-exporting `CapitalClient`. Validates all needed API calls work against demo.
 
-- [ ] `broker/capital_client.py`
-  - [ ] Confirm `capital-mcp-server` importable as local path dependency
-  - [ ] Add path dependency to `pyproject.toml`: `capital-mcp-server @ file:///home/chris/dev/capital-mcp-server`
-  - [ ] Re-export `CapitalClient` — confirm import works end-to-end
-- [ ] Integration smoke test — `tests/integration/test_broker.py`
-  - [ ] `@pytest.mark.integration` — authenticate, ping, get_account_info, get_prices("EURUSD"), get_positions, get_client_sentiment
-  - [ ] `@pytest.mark.trade` — create_position + confirm_deal + close_position (EURUSD, minimal size)
+- [x] `broker/capital_client.py` — re-exports `CapitalClient`; import confirmed working
+- [x] `pyproject.toml` — `capital-com-mcp-server @ file:///home/chris/dev/capital-mcp-server` added
+- [x] `tests/integration/conftest.py` — loads .env from local or capital-mcp-server fallback
+- [x] Integration tests — `tests/integration/test_broker.py` — 7 tests passing against demo API
+  - [x] authenticate, ping, get_account_info, get_prices, get_positions, get_client_sentiment, get_historical_prices
+  - [ ] `@pytest.mark.trade` — create + confirm + close (written, run manually when needed)
 - [ ] **Human smoke test SM-02 (partial)** — confirm prices returned are plausible live values
 
 ---
 
-## Phase 3 — Risk Preflight
+## Phase 3 — Risk Preflight ✓
 
 Must be solid before any execution path is wired up. Unit-test exhaustively.
 
-- [ ] `risk/preflight.py`
-  - [ ] `validate_entry_proposal(proposal: dict, strategy_config: dict, global_config: dict) -> PreflightResult`
-  - [ ] `validate_monitor_decision(decision: dict, position: dict, strategy_config: dict, global_config: dict) -> PreflightResult`
-  - [ ] `PreflightResult` — dataclass: `passed: bool`, `violations: list[str]`
-  - [ ] Checks: stop_loss present and within max_pct, size within min/max, R:R ratio met, margin floor not breached, max open positions not exceeded, trailing stop distance within bounds
-  - [ ] Trailing stop ratchet check — can only move in profitable direction
-- [ ] Unit tests — `tests/unit/test_preflight.py`
-  - [ ] Valid proposal passes all checks
-  - [ ] Missing stop_loss is rejected
-  - [ ] Size above max_size is rejected
-  - [ ] R:R ratio below minimum is rejected
-  - [ ] Trailing stop moving against profit direction is rejected
-  - [ ] Margin floor breach halts execution
-  - [ ] Each violation produces a specific, readable message
+- [x] `risk/preflight.py`
+  - [x] `validate_entry_proposal(proposal, strategy_config, global_config, open_positions_count, margin_pct) -> PreflightResult`
+  - [x] `validate_monitor_decision(decision, position, strategy_config, global_config, margin_pct) -> PreflightResult`
+  - [x] `PreflightResult` — dataclass: `passed: bool`, `violations: list[str]`
+  - [x] Checks: stop_loss present and within max_pct, size within min/max, R:R ratio, margin floor, max positions, trailing stop bounds, contra_indicators required
+  - [x] Trailing stop ratchet check — LONG stop can only move up, SHORT stop can only move down
+- [x] Unit tests — `tests/unit/test_preflight.py` — 43 tests, all passing (55 total unit tests)
 
 ---
 
-## Phase 4 — Strategy Loader + Prompt Config
+## Phase 4 — Strategy Loader + Prompt Config ✓
 
 Defines the pluggable strategy interface. Both strategies must load and validate correctly.
 
-- [ ] `strategy/loader.py`
-  - [ ] `load_strategy(name: str, config_dir: Path) -> Strategy` — loads YAML + MD pair
-  - [ ] `list_strategies(config_dir: Path) -> list[str]` — discovers all valid strategy names
-  - [ ] `Strategy` dataclass: name, description, yaml config, md prompt text
-  - [ ] Schema validation on YAML load — fail loudly if required fields missing
-  - [ ] `load_base_prompt(config_dir: Path) -> str` — loads `_base.md`
-  - [ ] `load_scan_prompt(config_dir: Path) -> str` — loads `scan.md`
-- [ ] `config/strategies/_base.md` — define output schema contract and hard rules for Claude
-- [ ] `config/strategies/scan.md` — define market scan prompt and ranking criteria
-- [ ] `config/strategies/momentum.md` — momentum-specific reasoning instructions
-- [ ] `config/strategies/mean_reversion.md` — mean reversion-specific reasoning instructions
-- [ ] Unit tests — `tests/unit/test_strategy_loader.py`
-  - [ ] Both strategies load without error
-  - [ ] Missing YAML raises clear error
-  - [ ] Missing MD raises clear error
-  - [ ] Invalid YAML (missing required field) raises clear error
-  - [ ] `list_strategies()` returns both names, excludes `_base` and `scan`
+- [x] `strategy/loader.py`
+  - [x] `load_strategy(name: str, config_dir: Path) -> Strategy` — loads YAML + MD pair
+  - [x] `list_strategies(config_dir: Path) -> list[str]` — discovers all valid strategy names; excludes `_base` and `scan`
+  - [x] `Strategy` dataclass: name, description, config (dict), prompt (str)
+  - [x] Schema validation on YAML load — fails loudly if any required field missing
+  - [x] `load_base_prompt(config_dir: Path) -> str` — loads `_base.md`
+  - [x] `load_scan_prompt(config_dir: Path) -> str` — loads `scan.md`
+- [x] `config/strategies/_base.md` — proposal format, hard rules, contra_indicators contract
+- [x] `config/strategies/scan.md` — ranking criteria: trend, ATR, spread/ATR ratio, sentiment, session
+- [x] `config/strategies/momentum.md` — trend-following entry logic, trailing stop guidance, contra_indicators
+- [x] `config/strategies/mean_reversion.md` — counter-trend entry logic, fixed stop/TP, contra_indicators
+- [x] Unit tests — `tests/unit/test_strategy_loader.py` — 22 tests, all passing (77 total unit tests)
 
 ---
 
-## Phase 5 — Agent Layer (Monitor Use Only)
+## ~~Phase 5 — Agent Layer~~ — Removed
 
-Used exclusively by `monitor.py`. Not involved in the entry flow.
-
-- [ ] `agent/claude_client.py`
-  - [ ] `call_claude(system_prompt: str, user_prompt: str, model: str) -> str`
-  - [ ] Anthropic SDK wrapper — handles API errors, logs token usage
-  - [ ] Returns raw response text — parsing is done by `output_parser.py`
-- [ ] `agent/prompt_builder.py`
-  - [ ] `build_monitor_prompt(positions, prices, strategy: Strategy, base_prompt: str) -> tuple[str, str]`
-  - [ ] Returns (system_prompt, user_prompt) ready for `claude_client`
-  - [ ] Assembles: base rules + strategy MD + current positions + price data
-- [ ] `agent/output_parser.py`
-  - [ ] `parse_entry_response(raw: str) -> dict` — validates against entry schema
-  - [ ] `parse_monitor_response(raw: str) -> dict` — validates against monitor schema
-  - [ ] Raises `OutputParseError` with message on schema violation
-  - [ ] `contra_indicators` and `stop_loss` required — reject if absent
-- [ ] Unit tests — `tests/unit/test_agent.py`
-  - [ ] `output_parser` accepts valid entry JSON
-  - [ ] `output_parser` rejects JSON missing `contra_indicators`
-  - [ ] `output_parser` rejects JSON missing `stop_loss`
-  - [ ] `output_parser` rejects malformed JSON
-  - [ ] `prompt_builder` produces non-empty system + user prompts
-  - [ ] `prompt_builder` includes strategy name in output
+The agent layer (claude_client, prompt_builder, output_parser) has been removed from scope. The monitor is a rule engine — no Anthropic API calls at runtime. Claude Code is the only reasoning engine, operating during the entry flow only.
 
 ---
 
-## Phase 6 — Monitor
+## Phase 5 — Monitor (Rule Engine) ✓
 
-Autonomous position management subprocess. Runs only during an active session.
+Autonomous position management subprocess. Evaluates strategy YAML rules mechanically — no AI calls.
 
-- [ ] `monitor/monitor.py`
-  - [ ] Reads `MONITOR_INTERVAL_SECONDS` from env (default 60)
-  - [ ] Main loop: fetch positions → if none, sleep and continue
-  - [ ] For each open position: fetch current price, build monitor prompt, call Claude
-  - [ ] Parse + validate response via `output_parser`
-  - [ ] Run `preflight.validate_monitor_decision` — skip execution if fails, log violation
-  - [ ] Execute: HOLD (log only), ADJUST (`update_position`), CLOSE (`close_position`)
-  - [ ] Write `reasoning_trace` to DB on every cycle — including HOLD decisions
-  - [ ] Write `audit.jsonl` sidecar entry on every action
-  - [ ] Graceful shutdown on SIGTERM — finish current cycle, then exit
+- [x] `monitor/monitor.py`
+  - [x] `evaluate_position(position, price_data, strategy_config, session_end_time)` — pure rule engine, no I/O
+  - [x] Rules evaluated in order: hard stop → trailing stop ratchet → take profit → time exit → HOLD
+  - [x] `run_cycle` — fetches positions + prices, evaluates, executes ADJUST/CLOSE, writes cycle_snapshot
+  - [x] `run_loop` — main loop with configurable interval; sleeps in 1s increments for responsive SIGTERM
+  - [x] ADJUST via `CapitalClient.update_position`; CLOSE via `CapitalClient.close_position`
+  - [x] Writes `cycle_snapshot` to DB on every position every cycle
+  - [x] Writes `audit.jsonl` entry on every ADJUST or CLOSE
+  - [x] Graceful shutdown on SIGTERM — finishes current cycle then exits
+  - [x] CLI entry point: `python -m cfd_trading.monitor.monitor --session-id ... --db-path ...`
+- [x] `storage/db.py` + `storage/repository.py` — `strategy` column added to trades; `get_trade_by_broker_ref`, `update_trade_stop_loss` added
+- [x] Unit tests — `tests/unit/test_monitor_rules.py` — 25 tests, all passing (102 total unit tests)
+  - [x] Hard stop LONG/SHORT — triggers at and below stop level
+  - [x] Trailing stop ratchet LONG/SHORT — fires when profitable, skips when not, skipped when disabled
+  - [x] Take profit LONG/SHORT — triggers at and past target
+  - [x] Time exit — triggers within window, skips outside window, skips when no session end set
+  - [x] Rule priority: hard stop > trailing stop > take profit > time exit
+  - [x] HOLD when no conditions met; handles missing price data gracefully
 - [ ] Integration tests — `tests/integration/test_monitor.py`
-  - [ ] `@pytest.mark.trade` — open a demo position, run one monitor cycle, verify trace written to DB
-- [ ] **Human smoke test SM-06** — observe monitor log output for at least 2 cycles, confirm reasoning traces appear in DB
+  - [ ] `@pytest.mark.trade` — open a demo position, run one monitor cycle, verify snapshot written to DB
+- [ ] **Human smoke test SM-06** — observe monitor log for at least 2 cycles, verify cycle snapshots in DB
 
 ---
 
-## Phase 7 — MCP Tools + Server
+## Phase 6 — MCP Tools + Server ✓
 
 The FastMCP server that Claude Code talks to.
 
-- [ ] `tools/session_tools.py`
-  - [ ] `start_session` — authenticate, check positions, load config, start monitor subprocess, return session summary
-  - [ ] `end_session(close_positions: bool)` — stop monitor, optionally close all, write summary to DB
-  - [ ] `get_session_status` — positions, P&L, monitor alive, session duration
-- [ ] `tools/scan_tools.py`
-  - [ ] `scan_markets(watchlist: str | None)` — fetch ATR + trend slope + spread for each instrument, return ranked list
-  - [ ] `analyze_instrument(epic: str, strategy: str)` — fetch 60x1min + sentiment + open positions, return structured context dict
-- [ ] `tools/trade_tools.py`
-  - [ ] `validate_proposal(proposal_json: str)` — run preflight, return pass/fail + violations
-  - [ ] `execute_trade(proposal_json: str)` — create_position + confirm_deal + log to DB, return deal details
-- [ ] `server.py` — register all tools with FastMCP, wire startup logging
-- [ ] Unit tests — `tests/unit/test_tools.py`
-  - [ ] Each tool returns expected structure with mocked CapitalClient
-  - [ ] `validate_proposal` returns violations correctly
-  - [ ] `execute_trade` does not call Capital.com if preflight fails
+- [x] `tools/_state.py` — `SessionState` dataclass, `get/set/clear/require_state` helpers
+- [x] `tools/session_tools.py`
+  - [x] `start_session` — authenticate, check positions, load config, start monitor subprocess, return session summary
+  - [x] `end_session(close_positions: bool)` — stop monitor, optionally close all, write summary to DB
+  - [x] `get_session_status` — positions, P&L, monitor alive, session duration
+- [x] `tools/scan_tools.py`
+  - [x] `scan_markets(watchlist: str | None)` — fetch ATR + trend slope + spread for each instrument, return ranked list
+  - [x] `analyze_instrument(epic: str, strategy: str)` — fetch 60x1min + sentiment + open positions, return structured context dict
+- [x] `tools/trade_tools.py`
+  - [x] `validate_proposal(proposal_json: str)` — run preflight, return pass/fail + violations
+  - [x] `execute_trade(proposal_json: str)` — create_position + confirm_deal + log to DB, return deal details
+- [x] `server.py` — register all 7 tools with FastMCP
+- [x] Unit tests — `tests/unit/test_tools.py` — 27 tests, all passing (129 total unit tests)
+  - [x] Each tool returns expected structure with mocked CapitalClient
+  - [x] `validate_proposal` returns violations correctly for all rejection paths
+  - [x] `execute_trade` does not call Capital.com if preflight fails
+  - [x] `execute_trade` logs trade to DB on success
 - [ ] Integration tests — `tests/integration/test_tools.py`
   - [ ] `@pytest.mark.integration` — `start_session`, `scan_markets`, `analyze_instrument`, `get_session_status`
   - [ ] `@pytest.mark.trade` — full cycle: start → scan → analyze → validate → execute → end
@@ -180,22 +154,23 @@ The FastMCP server that Claude Code talks to.
 
 ---
 
-## Phase 8 — GitHub Actions
+## Phase 7 — GitHub Actions ✓
 
 Automated integration tests on every push.
 
-- [ ] `.github/workflows/integration.yml`
-  - [ ] Trigger: push to any branch
-  - [ ] Python 3.12, install dependencies including local capital-mcp-server path
-  - [ ] Run: `pytest tests/unit/ -v` (always)
-  - [ ] Run: `pytest tests/integration/ -m integration -v` (always, using demo API secrets)
-  - [ ] Exclude `@pytest.mark.trade` from CI
-  - [ ] Required secrets: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
-- [ ] Verify workflow passes on first push after Phase 7 complete
+- [x] `.github/workflows/ci.yml`
+  - [x] Trigger: push/PR to any branch
+  - [x] Python 3.12; checks out `cdr74/capital-mcp-server` sibling repo and installs it before main package
+  - [x] `unit-tests` job: `pytest tests/unit/ -v` (always, no secrets needed)
+  - [x] `integration-tests` job: `pytest tests/integration/ -m integration -v` (runs after unit-tests; uses demo API secrets)
+  - [x] `@pytest.mark.trade` excluded from CI (not in `-m integration` filter)
+  - [x] Required secrets: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
+  - [x] `pyproject.toml` dependency changed from `file://` local path to plain `capital-com-mcp-server` name
+- [ ] Verify workflow passes on first push to GitHub
 
 ---
 
-## Phase 9 — MCP Config Wiring
+## Phase 8 — MCP Config Wiring
 
 Wire both MCP servers so Claude Code / Claude Desktop can talk to them.
 

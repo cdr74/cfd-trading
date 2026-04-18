@@ -145,10 +145,19 @@ A persistent background daemon (surviving Claude Code exit) is out of scope for 
 
 | Phase | Which Claude | How |
 |-------|-------------|-----|
-| Scan, strategy selection, trade proposal | Outer Claude (Claude Code session) | Claude Code calls MCP tools, reasons over returned data, presents to human |
-| Monitor (autonomous) | Inner Claude (Anthropic SDK call inside monitor.py) | `monitor.py` calls Anthropic API directly, parses structured JSON response |
+| Scan, strategy selection, trade proposal | Claude Code (active session) | Claude Code calls MCP tools, reasons over returned data, presents conversational summary + proposal JSON to human |
+| Monitor (autonomous) | No Claude — rule engine only | `monitor.py` evaluates YAML rules mechanically; no Anthropic API calls |
 
-This avoids calling Claude from inside a Claude tool during the entry flow. The `agent/` layer (claude_client, prompt_builder, output_parser) is used exclusively by `monitor.py`.
+Claude Code is the only reasoning engine. No Anthropic API key is required at runtime. The `agent/` layer is not needed and has been removed from scope.
+
+### 4.3a Proposal Presentation Format
+
+Claude Code presents trade proposals in two parts:
+
+1. **Conversational summary** — plain-language rationale: what it sees, why it's proposing this trade, what could go wrong (`contra_indicators`), and the key risk parameters.
+2. **Proposal JSON** — the structured contract (see §4.5) in a code block, passed directly to `validate_proposal` and then `execute_trade` if approved.
+
+The JSON is the authoritative record. The conversation is the presentation layer. Both are always present — neither replaces the other.
 
 ### 4.4 State Persistence
 
@@ -161,11 +170,10 @@ This avoids calling Claude from inside a Claude tool during the entry flow. The 
 | File location | Keep `trading.db` on Linux FS (`~/` or `/home/...`) not `/mnt/c/` — I/O performance |
 | Migration path | SQLite → Postgres (RDS) when moving to AWS — minimal schema change |
 
-### 4.5 Claude Output Schema
+### 4.5 Entry Proposal JSON Schema
 
-Claude always responds with a single JSON object. The orchestrator parses and validates before any action. Two schemas exist: entry (full trade proposal) and monitor (position review).
+Claude Code produces a single JSON object as the formal trade proposal. This is passed to `validate_proposal` (preflight) and then `execute_trade` if the human approves.
 
-**Entry Cycle Output:**
 ```json
 {
   "cycle_id": "string",
@@ -210,18 +218,28 @@ Claude always responds with a single JSON object. The orchestrator parses and va
 }
 ```
 
-**Key rules:** `contra_indicators` and `stop_loss` are always required. `action: NONE` is a valid explicit output. Full prompt + response logged to `reasoning_traces` on every cycle.
+**Key rules:** `contra_indicators` and `stop_loss` are always required. `action: NONE` is a valid explicit output (Claude declines to trade). The JSON is logged to `reasoning_traces` on every entry cycle alongside the conversational summary.
 
-### 4.6 Dynamic Risk Management
+### 4.6 Position Monitoring — Rule-Based Engine
+
+After a trade is entered, the monitor manages the position mechanically from the strategy YAML. No AI call is made. Rules are evaluated in order every `MONITOR_INTERVAL_SECONDS` (default 60):
+
+| Rule | Condition | Action |
+|------|-----------|--------|
+| Hard stop | Current price crosses `stop_loss.value` | CLOSE — log to DB + audit.jsonl |
+| Trailing stop ratchet | Price moved favourably by `trailing_stop.initial_distance_pct` | ADJUST stop level (ratchet only — never widens) |
+| Take profit | Current price reaches `take_profit.initial_value` | CLOSE |
+| Time exit | `session_end - close_minutes_before_session_end` | CLOSE |
+| No condition met | — | HOLD — log cycle snapshot, sleep |
 
 | Decision | Value |
 |----------|-------|
-| Position monitoring | Claude-driven, every 60s (configurable per strategy) |
-| Monitor autonomy | Auto-execute ADJUST/CLOSE within risk bounds — no human gate |
+| Monitor reasoning | None — pure rule evaluation from strategy YAML |
+| Anthropic API calls at runtime | None — no API key required for monitoring |
 | Trailing stop rule | Ratchet-only — can only move in profitable direction |
-| Hard stop | Always present. Max % defined in `risk.yaml`. Enforced mechanically, not by Claude. |
-| Take profit | Dynamic — Claude can adjust. Min R:R ratio enforced (strategy YAML) |
-| Preflight location | `cfd_trading/risk/preflight.py` — validates both entry proposals and monitor decisions |
+| Hard stop enforcement | Mechanical, always present — `risk.yaml` max % is the ceiling |
+| Take profit | Fixed at entry proposal value — no dynamic adjustment in v1 |
+| Preflight location | `risk/preflight.py` — validates entry proposals only; monitor enforces rules directly |
 
 ### 4.7 Strategy Pluggability
 
@@ -241,10 +259,10 @@ cfd-trading/
 │   ├── risk.yaml                    # global hard limits
 │   ├── watchlist.yaml               # asset universe (forex, indices, commodities, crypto)
 │   └── strategies/
-│       ├── _base.md                 # output schema + hard rules, injected into all prompts
-│       ├── scan.md                  # market scan prompt (used by scan_markets + monitor)
-│       ├── momentum.yaml / .md      # trend-following strategy
-│       └── mean_reversion.yaml / .md  # range-bound strategy
+│       ├── _base.md                 # proposal schema + hard rules for Claude Code context
+│       ├── scan.md                  # market scan prompt injected into Claude Code context
+│       ├── momentum.yaml / .md      # trend-following strategy (rules + Claude Code prompt)
+│       └── mean_reversion.yaml / .md  # range-bound strategy (rules + Claude Code prompt)
 ├── data/                            # gitignored
 │   ├── trading.db
 │   └── audit.jsonl
@@ -255,22 +273,18 @@ cfd-trading/
 │   │   ├── scan_tools.py            # scan_markets, analyze_instrument
 │   │   └── trade_tools.py           # validate_proposal, execute_trade
 │   ├── monitor/
-│   │   └── monitor.py               # subprocess: CapitalClient + Anthropic SDK
-│   ├── agent/                       # used by monitor.py only
-│   │   ├── claude_client.py         # Anthropic SDK wrapper
-│   │   ├── prompt_builder.py        # assembles system + user message from strategy files
-│   │   └── output_parser.py         # parses + validates Claude JSON against schema
+│   │   └── monitor.py               # rule engine subprocess — no AI calls
 │   ├── strategy/
 │   │   └── loader.py                # discovers + validates strategy YAML+MD pairs
 │   ├── broker/
 │   │   └── capital_client.py        # re-exports CapitalClient from capital-mcp-server
 │   ├── risk/
-│   │   └── preflight.py             # validates Claude output vs strategy YAML bounds
+│   │   └── preflight.py             # validates entry proposals vs strategy YAML bounds
 │   └── storage/
 │       ├── db.py                    # SQLite init + schema
 │       └── repository.py            # CRUD: trades, cycle_snapshots, reasoning_traces
 ├── tests/
-│   ├── unit/                        # preflight, output_parser, prompt_builder, strategy loader
+│   ├── unit/                        # preflight, strategy loader, monitor rules, tools
 │   └── integration/                 # against Capital.com demo API
 ├── pyproject.toml
 ├── .env.example
@@ -348,16 +362,23 @@ AUDIT_LOG_PATH=./data/audit.jsonl
 ## 8. SQLite Schema
 
 ```sql
+sessions:
+  id (UUID), started_at, ended_at (nullable), status (ACTIVE | CLOSED),
+  summary (JSON, nullable)
+  -- top-level wrapper for all activity in one Claude/app session
+
 cycle_snapshots:
-  id, ts, asset, strategy, account_bal, positions (JSON), market_data (JSON)
+  id, session_id (FK → sessions), ts, asset, strategy,
+  account_bal, positions (JSON), market_data (JSON)
 
 trades:
-  id, cycle_id, ts, asset, direction, size, entry_price, stop_loss, take_profit,
-  status, broker_ref
+  id, session_id (FK → sessions), cycle_id, ts, asset, direction, size,
+  entry_price, stop_loss, take_profit, status, broker_ref
   -- status: PROPOSED | APPROVED | REJECTED | EXECUTED | FAILED
 
 reasoning_traces:
-  id, cycle_id, ts, prompt_tokens, output_tokens, reasoning, tool_calls (JSON)
+  id, session_id (FK → sessions), cycle_id, ts, prompt_tokens, output_tokens,
+  reasoning, tool_calls (JSON)
   -- captured for ALL cycles including monitor — critical for post-trade debugging
   -- full prompt (system + user) stored, not just Claude's response
 ```
@@ -366,17 +387,19 @@ reasoning_traces:
 
 ## 9. Implementation Order
 
-| # | Component | Notes |
-|---|-----------|-------|
-| 1 | `pyproject.toml` + project scaffold | Installable package, capital-mcp-server as local path dependency |
-| 2 | `storage/db.py` + `repository.py` | SQLite schema, CRUD — all other components depend on this |
-| 3 | `broker/capital_client.py` | Validate all needed calls against Capital.com demo API |
-| 4 | `risk/preflight.py` | Unit-test in isolation against mock strategy YAML — must be solid before execution |
-| 5 | `strategy/loader.py` + all config files | Pluggable strategy interface; validate with both momentum + mean_reversion |
-| 6 | `agent/` | claude_client, prompt_builder, output_parser — for monitor use only |
-| 7 | `monitor/monitor.py` | Autonomous loop; integration test on demo API |
-| 8 | `tools/` + `server.py` | All 7 MCP tools; wire FastMCP |
-| 9 | Claude Desktop / Code MCP config | Wire cfd-trading MCP + capital-mcp-server via `wsl -e`; end-to-end test |
+| # | Component | Status | Notes |
+|---|-----------|--------|-------|
+| 1 | `pyproject.toml` + project scaffold | **Done** | Installable package, capital-mcp-server as local path dependency |
+| 2 | `storage/db.py` + `repository.py` | **Done** | SQLite schema + CRUD; sessions table wraps all activity |
+| 3 | `broker/capital_client.py` | **Done** | Re-exports CapitalClient; 7 integration tests pass against demo API |
+| 4 | `risk/preflight.py` | **Done** | 43 unit tests covering all validation rules and edge cases |
+| 5 | `strategy/loader.py` + all config files | Next | Pluggable strategy interface; write _base.md, scan.md, momentum.md, mean_reversion.md |
+| 6 | `monitor/monitor.py` | — | Rule-based engine only — no AI calls; evaluates YAML conditions, executes ADJUST/CLOSE |
+| 7 | `tools/` + `server.py` | — | All 7 MCP tools; wire FastMCP |
+| 8 | GitHub Actions | — | CI: unit tests always; integration tests on push using demo API secrets |
+| 9 | Claude Desktop / Code MCP config | — | Wire cfd-trading MCP via `wsl -e`; end-to-end smoke tests |
+
+Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been removed from scope. The monitor uses rule evaluation, not AI calls.
 
 ---
 
@@ -384,9 +407,9 @@ reasoning_traces:
 
 | Item | Priority | Status |
 |------|----------|--------|
-| Implement `storage/` — DB schema + CRUD | High | Not started |
-| Implement `broker/capital_client.py` + smoke test | High | Not started |
-| Implement `risk/preflight.py` + unit tests | High | Not started |
+| Implement `storage/` — DB schema + CRUD | High | **Done** |
+| Implement `broker/capital_client.py` + integration tests | High | **Done** |
+| Implement `risk/preflight.py` + unit tests | High | **Done** |
 | Define `_base.md` output contract + hard rules | High | Not started |
 | Define `scan.md` prompt module | High | Not started |
 | Implement `strategy/loader.py` + YAML schema | High | Not started |

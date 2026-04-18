@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "cfd-trading"
@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
     "pydantic>=2.0.0",
+    "capital-com-mcp-server",
 ]
 
 [project.optional-dependencies]
