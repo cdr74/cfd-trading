@@ -193,3 +193,17 @@ Wire both MCP servers so Claude Code / Claude Desktop can talk to them.
 - [ ] Proactive monitor alert if top-ranked asset changes
 - [ ] Web UI / dashboard for trade history
 - [ ] Migrate SQLite → Postgres (RDS) for AWS deployment
+
+### Broker / Instrument Generalization Refactor
+
+See README §4.8 for the full analysis. The logic layer (preflight, strategy, storage, monitor rules) is already generic. The tools layer and monitor I/O are tightly coupled to Capital.com response shapes.
+
+- [ ] Define `BrokerClient` Protocol + normalized data types in `broker/protocol.py`
+  - [ ] `Position`, `OHLCBar`, `AccountInfo`, `Sentiment`, `OrderRequest`, `ExecutionResult` dataclasses
+  - [ ] `BrokerClient` Protocol with typed method signatures
+- [ ] Wrap `CapitalClient` in an adapter that implements the Protocol and translates all Capital.com response shapes into the normalized types
+- [ ] Refactor `session_tools.py`, `scan_tools.py`, `trade_tools.py` to work against normalized types only
+- [ ] Refactor `monitor/monitor.py` I/O to work against normalized types only
+- [ ] Move Capital.com-specific execution quirks into the adapter (create→confirm two-step, stop_distance vs stop_level for trailing stops)
+- [ ] Make `get_sentiment()` return `None` when not available rather than erroring — tools handle absence gracefully
+- [ ] Resolve LONG/SHORT vs BUY/SELL inconsistency — use LONG/SHORT throughout; adapter translates to broker strings

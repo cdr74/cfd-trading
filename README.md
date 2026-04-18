@@ -241,6 +241,59 @@ After a trade is entered, the monitor manages the position mechanically from the
 | Take profit | Fixed at entry proposal value — no dynamic adjustment in v1 |
 | Preflight location | `risk/preflight.py` — validates entry proposals only; monitor enforces rules directly |
 
+### 4.8 Broker and Instrument Generalization — Deferred
+
+The current architecture is intentionally Capital.com-specific for v1. A generalization refactor is planned for a later point. This section records what would need to change and why.
+
+#### What is already generic
+
+The logic layer requires no changes to support a different broker or instrument type:
+
+| Layer | Why it's generic |
+|---|---|
+| `risk/preflight.py` | Pure dict validation — no broker concepts |
+| `strategy/loader.py` + YAML/MD | Strategy bounds (size, stop %, R:R, trailing stop params) apply to any instrument |
+| `storage/` | Sessions, trades, snapshots, traces — entirely domain-agnostic |
+| Proposal JSON schema | LONG/SHORT, size, stop %, R:R ratio — standard trading concepts |
+| Monitor rule evaluation | Hard stop, trailing stop ratchet, take profit, time exit — generic rules |
+
+#### What is tightly coupled to Capital.com
+
+**No broker interface exists.** `broker/capital_client.py` is a naked re-export with no `BrokerClient` Protocol or ABC. Swapping brokers has no single seam to cut.
+
+**Capital.com response shapes are parsed inline throughout the tools.** Each tool unpacks Capital.com JSON directly — position field names (`dealId`, `upl`, `stopLevel`), price field names (`highPrice.bid`, `closePrice.ask`, `snapshotTime`), account structure (`balance.deposit`, `balance.available`). Changing brokers means hunting these across `session_tools.py`, `scan_tools.py`, `trade_tools.py`, and `monitor.py`.
+
+**Two-step create → confirm execution is hardcoded.** `execute_trade` calls `create_position()` then `confirm_deal()`. Other brokers return a fill immediately or use a different confirmation flow.
+
+**Trailing stop handling is Capital.com-specific.** Capital.com requires `stop_distance` (points from entry) for trailing stops, not a price level. This conversion is in the tool layer, not the broker adapter.
+
+**Direction inconsistency: LONG/SHORT vs BUY/SELL.** The proposal schema uses `LONG`/`SHORT`. Capital.com position data uses `BUY`/`SELL`. The mapping is done in `execute_trade`; the monitor reads `BUY`/`SELL` from position data directly.
+
+**Client sentiment is a core signal, not optional.** `scan_markets` and `analyze_instrument` always call `get_client_sentiment()`. Not all brokers provide this data.
+
+#### The refactor — one targeted addition to `broker/`
+
+Define a `BrokerClient` Protocol plus normalized data types in `broker/protocol.py`:
+
+```python
+@runtime_checkable
+class BrokerClient(Protocol):
+    def authenticate(self) -> bool: ...
+    def get_positions(self) -> list[Position]: ...           # normalized
+    def get_prices(self, symbol: str, ...) -> list[OHLCBar]: ...   # normalized
+    def get_account(self) -> AccountInfo: ...                # normalized
+    def get_sentiment(self, symbol: str) -> Sentiment | None: ...  # optional
+    def create_position(self, order: OrderRequest) -> ExecutionResult: ...
+    def update_stop(self, deal_id: str, stop: float) -> bool: ...
+    def close_position(self, deal_id: str) -> bool: ...
+```
+
+`CapitalClient` gets a thin adapter that translates its response shapes into these normalized types. All tool and monitor code works against the normalized types only. A new broker requires only a new adapter — zero changes to tools, preflight, monitor, or strategy layers.
+
+**Estimated effort:** 1–2 days. The logic is already clean — it is purely a normalization and interface definition exercise.
+
+---
+
 ### 4.7 Strategy Pluggability
 
 Each strategy is a self-contained pair of files in `config/strategies/`:
