@@ -119,6 +119,35 @@ Verify `end_session(close_positions=False)` stops the monitor, leaves positions 
 
 ---
 
+## 5. Running the MCP Server (Development)
+
+The MCP server runs as a Podman container. Build context is the parent `trading/` directory.
+
+```bash
+# Start (builds from source)
+cd ~/dev/trading/cfd-trading
+podman-compose -f podman-compose.dev.yml up --build -d
+
+# Stop
+podman-compose -f podman-compose.dev.yml down
+
+# Logs
+podman logs -f cfd-trading-dev
+```
+
+MCP endpoint: `http://localhost:8089/mcp`
+
+**Important:** After any change to `server.py` or `tools/`, rebuild the container — the running image will not pick up source changes automatically.
+
+**Venv note:** The local `.venv` is used for running tests only, not for serving. Because `capital-com-mcp-server` depends on `capital-com-client @ git+https://...` (a private repo), pip cannot resolve it automatically. Install the local clone manually:
+
+```bash
+pip install -e ~/dev/trading/capital-com-client/
+pip install -e ".[dev]"
+```
+
+---
+
 ## Session Startup Checklist
 
 At the start of every implementation session:
@@ -126,4 +155,5 @@ At the start of every implementation session:
 1. Read `README.md` — confirm you understand the current design state
 2. Read `TODO.md` — identify what is in progress and what is next
 3. Check `git status` — understand what has already been changed
-4. Ask if anything is unclear before writing a single line of code
+4. Verify containers are running: `podman ps` — should show `cfd-trading-dev` and `capital-mcp-server`
+5. Ask if anything is unclear before writing a single line of code

@@ -1,0 +1,32 @@
+# podman-compose.yml — production deployment (pre-built image)
+# Usage:
+#   podman-compose up -d
+#   podman-compose down
+#
+# Requires: podman-compose (pip install podman-compose)
+# Credentials: copy .env.example to .env and fill in your values
+
+services:
+  cfd-trading:
+    image: ghcr.io/cdr74/cfd-trading:latest
+    # To build locally instead, comment the image line above and uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: Containerfile
+    container_name: cfd-trading
+    ports:
+      - "8089:8089"   # host_port:container_port — MCP endpoint: http://localhost:8089/mcp
+    env_file:
+      - .env
+    environment:
+      - MCP_TRANSPORT=streamable-http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8089
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    logging:
+      driver: "journald"
+      options:
+        tag: "cfd-trading"

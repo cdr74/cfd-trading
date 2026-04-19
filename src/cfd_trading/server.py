@@ -3,7 +3,10 @@
 import logging
 import os
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+load_dotenv()
 
 from cfd_trading.tools.session_tools import start_session, end_session, get_session_status
 from cfd_trading.tools.scan_tools import scan_markets, analyze_instrument
@@ -14,7 +17,11 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 
-mcp = FastMCP(name="cfd-trading")
+mcp = FastMCP(
+    name="cfd-trading",
+    host=os.getenv("MCP_HOST", "127.0.0.1"),
+    port=int(os.getenv("MCP_PORT", "8000")),
+)
 
 mcp.tool()(start_session)
 mcp.tool()(end_session)
@@ -26,7 +33,8 @@ mcp.tool()(execute_trade)
 
 
 def main():
-    mcp.run()
+    transport = os.getenv("MCP_TRANSPORT", "stdio")
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

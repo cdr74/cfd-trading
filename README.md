@@ -442,15 +442,15 @@ reasoning_traces:
 
 | # | Component | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | `pyproject.toml` + project scaffold | **Done** | Installable package, capital-mcp-server as local path dependency |
-| 2 | `storage/db.py` + `repository.py` | **Done** | SQLite schema + CRUD; sessions table wraps all activity |
+| 1 | `pyproject.toml` + project scaffold | **Done** | Installable package, capital-mcp-server as dependency |
+| 2 | `storage/db.py` + `repository.py` | **Done** | SQLite schema + CRUD; 12 unit tests |
 | 3 | `broker/capital_client.py` | **Done** | Re-exports CapitalClient; 7 integration tests pass against demo API |
 | 4 | `risk/preflight.py` | **Done** | 43 unit tests covering all validation rules and edge cases |
-| 5 | `strategy/loader.py` + all config files | Next | Pluggable strategy interface; write _base.md, scan.md, momentum.md, mean_reversion.md |
-| 6 | `monitor/monitor.py` | — | Rule-based engine only — no AI calls; evaluates YAML conditions, executes ADJUST/CLOSE |
-| 7 | `tools/` + `server.py` | — | All 7 MCP tools; wire FastMCP |
-| 8 | GitHub Actions | — | CI: unit tests always; integration tests on push using demo API secrets |
-| 9 | Claude Desktop / Code MCP config | — | Wire cfd-trading MCP via `wsl -e`; end-to-end smoke tests |
+| 5 | `strategy/loader.py` + all config files | **Done** | Pluggable strategy interface; _base.md, scan.md, momentum.md, mean_reversion.md all written; 22 unit tests |
+| 6 | `monitor/monitor.py` | **Done** | Rule-based engine only — no AI calls; 25 unit tests |
+| 7 | `tools/` + `server.py` | **Done** | All 7 MCP tools wired with FastMCP; 27 unit tests; `server.py` supports stdio and streamable-HTTP transport via `MCP_TRANSPORT` env var |
+| 8 | GitHub Actions CI | **Done** | Unit tests always; integration tests on push using demo API secrets |
+| 9 | Container deployment + MCP wiring | **Done** | Podman container; Claude Desktop configured via HTTP endpoint; end-to-end smoke tests pending |
 
 Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been removed from scope. The monitor uses rule evaluation, not AI calls.
 
@@ -460,35 +460,97 @@ Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been
 
 | Item | Priority | Status |
 |------|----------|--------|
-| Implement `storage/` — DB schema + CRUD | High | **Done** |
-| Implement `broker/capital_client.py` + integration tests | High | **Done** |
-| Implement `risk/preflight.py` + unit tests | High | **Done** |
-| Define `_base.md` output contract + hard rules | High | Not started |
-| Define `scan.md` prompt module | High | Not started |
-| Implement `strategy/loader.py` + YAML schema | High | Not started |
-| Implement `agent/` layer | High | Not started |
-| Implement `monitor/monitor.py` | High | Not started |
-| Implement all 7 MCP tools + `server.py` | High | Not started |
-| Wire MCP config for Claude Desktop | High | Not started |
+| End-to-end smoke tests (SM-01 through SM-11) | High | Pending — see `SMOKE_TESTS.md` in workspace root |
+| Integration tests: monitor + tools against demo API | High | Written but not yet run against live demo |
+| CI: verify GitHub Actions passes on first push | High | Pending |
+| CI: add container build + push job to GitHub Actions | Medium | Not started |
 | Tune momentum + mean_reversion prompt modules on demo | Medium | Not started |
-| Define context window budget per cycle (token estimate) | Medium | Not started |
 | v2: persistent monitor daemon (survives session end) | Low | Deferred |
 | v2: replace ManualGate with AutoGate + circuit breaker | Low | Deferred |
+| Broker/instrument generalization refactor | Low | Deferred — see §4.8 |
 | Alpha Vantage MCP for macro context | Low | Deferred |
 | Web UI / dashboard for trade history | Low | Deferred |
 
 ---
 
-## 11. Starting a Claude Code Implementation Session
+## 11. Running the MCP Server
 
-At the start of each session, reference this file and use the following prompt:
+The MCP server runs as a **Podman container** exposing a streamable-HTTP endpoint at `http://localhost:8089/mcp`. Claude Desktop connects to it via the URL configured in `claude_desktop_config.json`.
+
+### Start (dev — builds from source)
+
+Run from the `trading/` workspace root (build context must include the sibling repos):
+
+```bash
+cd ~/dev/trading/cfd-trading
+podman-compose -f podman-compose.dev.yml up --build -d
+```
+
+### Start (prod — pre-built image)
+
+```bash
+cd ~/dev/trading/cfd-trading
+podman-compose up -d
+```
+
+### Stop
+
+```bash
+podman-compose -f podman-compose.dev.yml down   # dev
+podman-compose down                              # prod
+```
+
+### Logs
+
+```bash
+podman logs -f cfd-trading-dev
+```
+
+### Running locally (stdio mode, for testing only)
+
+```bash
+# Activate venv — note: capital-com-client must be installed from local clone
+# (the package is private and not on PyPI)
+pip install -e ~/dev/trading/capital-com-client/
+pip install -e ".[dev]"
+
+python -m cfd_trading.server   # or: cfd-trading  (if entry point is installed)
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | Set to `streamable-http` in container |
+| `MCP_HOST` | `127.0.0.1` | Set to `0.0.0.0` in container |
+| `MCP_PORT` | `8000` | Set to `8089` in container |
+| `CAPITAL_BASE_URL` | — | Demo or live Capital.com API URL |
+| `CAPITAL_API_KEY` | — | Capital.com API key |
+| `CAPITAL_IDENTIFIER` | — | Capital.com login email |
+| `CAPITAL_API_KEY_PASSWORD` | — | Capital.com API password |
+| `MONITOR_INTERVAL_SECONDS` | `60` | Monitor cycle interval |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| `AUDIT_LOG_PATH` | `./data/audit.jsonl` | Audit log path |
+
+---
+
+## 12. Starting a Claude Code Session
+
+At the start of each session:
+
+1. Read `README.md` — confirm you understand the current design state
+2. Read `TODO.md` — identify what is in progress and what is next
+3. Check `git status` — understand what has already been changed
+4. For cross-repo work, start from `~/dev/trading/` (parent workspace)
+
+Reference prompt:
 
 ```
 You are the implementation engineer for the CFD Trading System.
 README.md defines all design decisions — treat it as the source of truth.
 Do not deviate from agreed decisions without flagging the conflict and proposing a change.
 
-We are implementing step [N] of the implementation order: [component name].
+We are working on: [describe task].
 
 Update README.md whenever a design decision changes.
 ```

@@ -167,19 +167,24 @@ Automated integration tests on every push.
   - [x] Required secrets: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
   - [x] `pyproject.toml` dependency changed from `file://` local path to plain `capital-com-mcp-server` name
 - [ ] Verify workflow passes on first push to GitHub
+- [ ] Add container build + push job (build image, push to ghcr.io on tag)
 
 ---
 
-## Phase 8 — MCP Config Wiring
+## Phase 8 — Container Deployment + MCP Wiring ✓
 
-Wire both MCP servers so Claude Code / Claude Desktop can talk to them.
+Both MCP servers run as Podman containers and are wired to Claude Desktop via streamable-HTTP.
 
-- [ ] Locate Claude config: `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
-- [ ] Add `cfd-trading` MCP server entry — `wsl -e python -m cfd_trading.server`
-- [ ] Add `capital-mcp-server` entry — `wsl -e python -m capital_mcp_server` (already tested)
-- [ ] Set all required env vars in MCP config
-- [ ] Verify both servers appear as tool providers in Claude Code / Claude Desktop
-- [ ] Run full end-to-end human smoke test: complete session from `start_session` to `end_session`
+- [x] `Containerfile` — multi-repo build context (parent `trading/` dir); installs full dep chain without internet access
+- [x] `podman-compose.yml` — production compose (pulls from ghcr.io)
+- [x] `podman-compose.dev.yml` — dev compose (builds from source, sets `MCP_TRANSPORT=streamable-http`)
+- [x] `server.py` — `load_dotenv()` added; `MCP_HOST`, `MCP_PORT`, `MCP_TRANSPORT` env vars wired
+- [x] Claude Desktop config (`claude_desktop_config.json`) — both servers wired as HTTP endpoints
+  - `cfd-trading`: `http://localhost:8089/mcp`
+  - `capital-mcp-server`: `http://localhost:8088/mcp`
+- [x] Both containers verified running and responding
+- [ ] Restart Claude Desktop and verify both server tool sets appear in the tool panel
+- [ ] Run full end-to-end smoke tests — see `SMOKE_TESTS.md` in workspace root (SM-01 through SM-11)
 
 ---
 
