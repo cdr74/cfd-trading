@@ -13,14 +13,21 @@ jobs:
 
     steps:
       - name: Checkout cfd-trading
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Checkout capital-mcp-server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: cdr74/capital-mcp-server
           path: capital-mcp-server
-          ssh-key: ${{ secrets.CAPITAL_MCP_SERVER_DEPLOY_KEY }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Checkout capital-com-client
+        uses: actions/checkout@v5
+        with:
+          repository: cdr74/capital-com-client
+          path: capital-com-client
+          token: ${{ secrets.GH_PAT }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -30,7 +37,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e capital-mcp-server
+          pip install -e capital-com-client
+          pip install --no-deps -e capital-mcp-server
+          pip install "fastmcp>=3.0.0,<4.0.0" "requests>=2.25.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install -e ".[dev]"
 
       - name: Run unit tests
@@ -43,14 +52,21 @@ jobs:
 
     steps:
       - name: Checkout cfd-trading
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Checkout capital-mcp-server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: cdr74/capital-mcp-server
           path: capital-mcp-server
-          ssh-key: ${{ secrets.CAPITAL_MCP_SERVER_DEPLOY_KEY }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Checkout capital-com-client
+        uses: actions/checkout@v5
+        with:
+          repository: cdr74/capital-com-client
+          path: capital-com-client
+          token: ${{ secrets.GH_PAT }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -60,7 +76,9 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e capital-mcp-server
+          pip install -e capital-com-client
+          pip install --no-deps -e capital-mcp-server
+          pip install "fastmcp>=3.0.0,<4.0.0" "requests>=2.25.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install -e ".[dev]"
 
       - name: Run integration tests
