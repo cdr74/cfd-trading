@@ -166,7 +166,7 @@ Automated integration tests on every push.
   - [x] `@pytest.mark.trade` excluded from CI (not in `-m integration` filter)
   - [x] Required secrets: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
   - [x] `pyproject.toml` dependency changed from `file://` local path to plain `capital-com-mcp-server` name
-- [ ] Verify workflow passes on first push to GitHub
+- [x] Verify workflow passes on first push to GitHub
 - [ ] Add container build + push job (build image, push to ghcr.io on tag)
 
 ---
