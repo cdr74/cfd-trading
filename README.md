@@ -477,27 +477,30 @@ Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been
 
 The MCP server runs as a **Podman container** exposing a streamable-HTTP endpoint at `http://localhost:8089/mcp`. Claude Desktop connects to it via the URL configured in `claude_desktop_config.json`.
 
-### Start (dev — builds from source)
+### Workspace helper scripts (recommended)
 
-Run from the `trading/` workspace root (build context must include the sibling repos):
+From the `trading/` workspace root:
+
+```bash
+./mcp-start.sh    # pulls latest images, rebuilds cfd-trading from source, starts both containers
+./mcp-stop.sh     # stops both containers
+./mcp-status.sh   # full health check: containers, endpoints, credentials, Desktop config
+./mcp-fix-config.sh  # restores mcpServers block if Claude Desktop overwrites the config
+```
+
+### Manual start (dev — builds from source)
+
+Build context must be the `trading/` parent directory (includes sibling repos):
 
 ```bash
 cd ~/dev/trading/cfd-trading
 podman-compose -f podman-compose.dev.yml up --build -d
 ```
 
-### Start (prod — pre-built image)
+### Manual stop
 
 ```bash
-cd ~/dev/trading/cfd-trading
-podman-compose up -d
-```
-
-### Stop
-
-```bash
-podman-compose -f podman-compose.dev.yml down   # dev
-podman-compose down                              # prod
+podman-compose -f podman-compose.dev.yml down
 ```
 
 ### Logs
@@ -505,6 +508,11 @@ podman-compose down                              # prod
 ```bash
 podman logs -f cfd-trading-dev
 ```
+
+### Claude Desktop config note
+
+Claude Desktop occasionally overwrites `claude_desktop_config.json` on launch, removing the
+`mcpServers` block. Run `./mcp-fix-config.sh` to restore it, then restart Claude Desktop.
 
 ### Running locally (stdio mode, for testing only)
 

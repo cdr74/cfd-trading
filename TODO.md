@@ -160,12 +160,12 @@ Automated integration tests on every push.
 
 - [x] `.github/workflows/ci.yml`
   - [x] Trigger: push/PR to any branch
-  - [x] Python 3.12; checks out `cdr74/capital-mcp-server` sibling repo and installs it before main package
+  - [x] Python 3.12; checks out `capital-mcp-server` and `capital-com-client` siblings via `GH_PAT`; installs in dep order with `--no-deps` to avoid private git URL resolution
   - [x] `unit-tests` job: `pytest tests/unit/ -v` (always, no secrets needed)
   - [x] `integration-tests` job: `pytest tests/integration/ -m integration -v` (runs after unit-tests; uses demo API secrets)
   - [x] `@pytest.mark.trade` excluded from CI (not in `-m integration` filter)
-  - [x] Required secrets: `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`, `ANTHROPIC_API_KEY`
-  - [x] `pyproject.toml` dependency changed from `file://` local path to plain `capital-com-mcp-server` name
+  - [x] Required secrets: `GH_PAT` (private repo checkout), `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`
+  - [x] `anthropic` dependency removed — monitor is a pure rule engine, no API calls at runtime
 - [x] Verify workflow passes on first push to GitHub
 - [ ] Add container build + push job (build image, push to ghcr.io on tag)
 
