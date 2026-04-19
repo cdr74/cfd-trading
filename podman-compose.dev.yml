@@ -13,11 +13,11 @@ services:
       dockerfile: cfd-trading/Containerfile
     container_name: cfd-trading-dev
     ports:
-      - "8089:8089"   # host_port:container_port — MCP endpoint: http://localhost:8089/mcp
+      - "8089:8089"   # host_port:container_port — SSE endpoint: http://localhost:8089/sse
     env_file:
       - .env
     environment:
-      - MCP_TRANSPORT=streamable-http
+      - MCP_TRANSPORT=sse
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8089
       - LOG_LEVEL=DEBUG

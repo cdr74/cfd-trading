@@ -135,7 +135,7 @@ podman-compose -f podman-compose.dev.yml down
 podman logs -f cfd-trading-dev
 ```
 
-MCP endpoint: `http://localhost:8089/mcp`
+MCP endpoint: `http://localhost:8089/sse`
 
 **Important:** After any change to `server.py` or `tools/`, rebuild the container — the running image will not pick up source changes automatically.
 

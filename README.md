@@ -404,7 +404,6 @@ CAPITAL_BASE_URL=https://demo-api-capital.backend-capital.com
 CAPITAL_API_KEY=
 CAPITAL_IDENTIFIER=
 CAPITAL_API_KEY_PASSWORD=
-ANTHROPIC_API_KEY=
 MONITOR_INTERVAL_SECONDS=60
 LOG_LEVEL=INFO
 AUDIT_LOG_PATH=./data/audit.jsonl
@@ -448,7 +447,7 @@ reasoning_traces:
 | 4 | `risk/preflight.py` | **Done** | 43 unit tests covering all validation rules and edge cases |
 | 5 | `strategy/loader.py` + all config files | **Done** | Pluggable strategy interface; _base.md, scan.md, momentum.md, mean_reversion.md all written; 22 unit tests |
 | 6 | `monitor/monitor.py` | **Done** | Rule-based engine only — no AI calls; 25 unit tests |
-| 7 | `tools/` + `server.py` | **Done** | All 7 MCP tools wired with FastMCP; 27 unit tests; `server.py` supports stdio and streamable-HTTP transport via `MCP_TRANSPORT` env var |
+| 7 | `tools/` + `server.py` | **Done** | All 7 MCP tools wired with FastMCP; 27 unit tests; `server.py` supports stdio and SSE transport via `MCP_TRANSPORT` env var |
 | 8 | GitHub Actions CI | **Done** | Unit tests always; integration tests on push using demo API secrets |
 | 9 | Container deployment + MCP wiring | **Done** | Podman container; Claude Desktop configured via HTTP endpoint; end-to-end smoke tests pending |
 
@@ -460,9 +459,8 @@ Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been
 
 | Item | Priority | Status |
 |------|----------|--------|
-| End-to-end smoke tests (SM-01 through SM-11) | High | Pending — see `SMOKE_TESTS.md` in workspace root |
-| Integration tests: monitor + tools against demo API | High | Written but not yet run against live demo |
-| CI: verify GitHub Actions passes on first push | High | Pending |
+| End-to-end smoke tests (SM-01 through SM-11) | High | Ready to run — see `SMOKE_TESTS.md` in workspace root |
+| Integration tests: monitor + tools against demo API | Medium | Written, run in CI; `@pytest.mark.trade` manual only |
 | CI: add container build + push job to GitHub Actions | Medium | Not started |
 | Tune momentum + mean_reversion prompt modules on demo | Medium | Not started |
 | v2: persistent monitor daemon (survives session end) | Low | Deferred |
@@ -475,7 +473,7 @@ Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been
 
 ## 11. Running the MCP Server
 
-The MCP server runs as a **Podman container** exposing a streamable-HTTP endpoint at `http://localhost:8089/mcp`. Claude Desktop connects to it via the URL configured in `claude_desktop_config.json`.
+The MCP server runs as a **Podman container** exposing an SSE endpoint at `http://localhost:8089/sse`. Claude Desktop connects to it via the URL configured in `claude_desktop_config.json`.
 
 ### Workspace helper scripts (recommended)
 
@@ -529,7 +527,7 @@ python -m cfd_trading.server   # or: cfd-trading  (if entry point is installed)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_TRANSPORT` | `stdio` | Set to `streamable-http` in container |
+| `MCP_TRANSPORT` | `stdio` | Set to `sse` in container |
 | `MCP_HOST` | `127.0.0.1` | Set to `0.0.0.0` in container |
 | `MCP_PORT` | `8000` | Set to `8089` in container |
 | `CAPITAL_BASE_URL` | — | Demo or live Capital.com API URL |
