@@ -41,7 +41,7 @@ jobs:
           pip install --no-deps -e capital-mcp-server
           pip install "fastmcp>=3.0.0,<4.0.0" "requests>=2.25.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install --no-deps -e .
-          pip install "anthropic>=0.40.0" "mcp[cli]>=1.0.0" "pyyaml>=6.0" "requests>=2.31.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
+          pip install "mcp[cli]>=1.0.0" "pyyaml>=6.0" "requests>=2.31.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install "pytest>=8.0" "pytest-asyncio>=0.23"
 
       - name: Run unit tests
@@ -82,7 +82,7 @@ jobs:
           pip install --no-deps -e capital-mcp-server
           pip install "fastmcp>=3.0.0,<4.0.0" "requests>=2.25.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install --no-deps -e .
-          pip install "anthropic>=0.40.0" "mcp[cli]>=1.0.0" "pyyaml>=6.0" "requests>=2.31.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
+          pip install "mcp[cli]>=1.0.0" "pyyaml>=6.0" "requests>=2.31.0" "pydantic>=2.0.0" "python-dotenv>=1.0.0"
           pip install "pytest>=8.0" "pytest-asyncio>=0.23"
 
       - name: Run integration tests
@@ -91,5 +91,4 @@ jobs:
           CAPITAL_API_KEY: ${{ secrets.CAPITAL_API_KEY }}
           CAPITAL_IDENTIFIER: ${{ secrets.CAPITAL_IDENTIFIER }}
           CAPITAL_API_KEY_PASSWORD: ${{ secrets.CAPITAL_API_KEY_PASSWORD }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: pytest tests/integration/ -m integration -v
