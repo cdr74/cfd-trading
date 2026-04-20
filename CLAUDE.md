@@ -79,9 +79,9 @@ pytest tests/integration/ -m trade -v   # only when explicitly testing execution
 
 ## 4. Human Smoke Tests — Session Verification Checklist
 
-The authoritative smoke test guide is **`SMOKE_TESTS.md`** in the workspace root (`~/dev/trading/SMOKE_TESTS.md`). It covers SM-01 through SM-11 with full steps, pass criteria, and the test matrix.
+The authoritative smoke test guide is **`integration-test/SMOKE_TESTS.md`**. It covers SM-01 through SM-11 with full steps, pass criteria, and the test matrix.
 
-Run `./mcp-start.sh` and `./mcp-status.sh` from the workspace root before any smoke test session. If the Claude Desktop config check fails, run `./mcp-fix-config.sh` and restart Claude Desktop.
+Run `./mcp-start.sh` and `./mcp-status.sh` from `integration-test/` before any smoke test session. If the Claude Desktop config check fails, run `./mcp-fix-config.sh` from `integration-test/` and restart Claude Desktop.
 
 The tests progress from infrastructure checks (SM-01: container health, SM-02: MCP discovery) through read-only broker calls (SM-03 to SM-05: session start, market scan, instrument analysis), proposal validation (SM-06/07), and finally live demo trades (SM-08: execute, SM-09: monitor cycle, SM-10/11: session end variants).
 
@@ -91,10 +91,10 @@ The tests progress from infrastructure checks (SM-01: container health, SM-02: M
 
 ## 5. Running the MCP Server
 
-The MCP server runs as a Podman container. Use the workspace helper scripts for the normal flow:
+The MCP server runs as a Podman container. Use the integration test scripts for the normal flow:
 
 ```bash
-cd ~/dev/trading
+cd ~/dev/trading/cfd-trading/integration-test
 ./mcp-start.sh   # pull latest image from ghcr.io and start
 ./mcp-stop.sh    # stop
 podman logs -f cfd-trading   # logs (production container)

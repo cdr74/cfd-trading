@@ -479,14 +479,15 @@ Note: the `agent/` layer (claude_client, prompt_builder, output_parser) has been
 
 The MCP server runs as a **Podman container** exposing a streamable-HTTP endpoint at `https://localhost:8089/mcp`. Claude Desktop connects to it via the URL configured in `claude_desktop_config.json`.
 
-### Workspace helper scripts (recommended)
+### Integration test scripts (recommended)
 
-From the `trading/` workspace root:
+Scripts live in `integration-test/` and can be run from any location:
 
 ```bash
-./mcp-start.sh    # pulls latest images from ghcr.io and starts both containers
-./mcp-stop.sh     # stops both containers
-./mcp-status.sh   # full health check: containers, endpoints, credentials, Desktop config
+cd ~/dev/trading/cfd-trading/integration-test
+./mcp-start.sh       # pulls latest images from ghcr.io and starts both containers
+./mcp-stop.sh        # stops both containers
+./mcp-status.sh      # full health check: containers, endpoints, credentials, Desktop config
 ./mcp-fix-config.sh  # restores mcpServers block if Claude Desktop overwrites the config
 ```
 
@@ -517,7 +518,7 @@ podman logs -f cfd-trading-dev   # dev container
 ### Claude Desktop config note
 
 Claude Desktop occasionally overwrites `claude_desktop_config.json` on launch, removing the
-`mcpServers` block. Run `./mcp-fix-config.sh` to restore it, then restart Claude Desktop.
+`mcpServers` block. Run `integration-test/mcp-fix-config.sh` to restore it, then restart Claude Desktop.
 
 The script writes HTTPS URLs (`https://localhost:808x/mcp`) and sets `NODE_OPTIONS: --use-system-ca`
 in each entry so that mcp-remote (Node.js) reads the Windows Trusted Root store and trusts the
