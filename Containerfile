@@ -39,6 +39,9 @@ ENV MCP_PORT=8089
 ENV LOG_LEVEL=INFO
 ENV SSL_CERTFILE=/certs/cert.pem
 ENV SSL_KEYFILE=/certs/key.pem
+ENV CONFIG_DIR=/app/config
+ENV DB_PATH=/app/data/trading.db
+ENV AUDIT_LOG_PATH=/app/data/audit.jsonl
 
 EXPOSE 8089
 

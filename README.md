@@ -540,6 +540,9 @@ python -m cfd_trading.server   # or: cfd-trading  (if entry point is installed)
 | `MCP_PORT` | `8000` | Set to `8089` in container |
 | `SSL_CERTFILE` | — | Path to TLS cert file (enables HTTPS when set with `SSL_KEYFILE`) |
 | `SSL_KEYFILE` | — | Path to TLS private key file |
+| `CONFIG_DIR` | `/app/config` | Path to the `config/` directory (strategies, risk, watchlist) |
+| `DB_PATH` | `/app/data/trading.db` | Path to the SQLite database file |
+| `AUDIT_LOG_PATH` | `/app/data/audit.jsonl` | Path to the audit log |
 | `CAPITAL_BASE_URL` | — | Demo or live Capital.com API URL |
 | `CAPITAL_API_KEY` | — | Capital.com API key |
 | `CAPITAL_IDENTIFIER` | — | Capital.com login email |
