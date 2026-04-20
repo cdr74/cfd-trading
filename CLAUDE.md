@@ -89,19 +89,22 @@ The tests progress from infrastructure checks (SM-01: container health, SM-02: M
 
 ---
 
-## 5. Running the MCP Server (Development)
+## 5. Running the MCP Server
 
-The MCP server runs as a Podman container. Build context is the parent `trading/` directory.
+The MCP server runs as a Podman container. Use the workspace helper scripts for the normal flow:
 
 ```bash
-# Start (builds from source)
+cd ~/dev/trading
+./mcp-start.sh   # pull latest image from ghcr.io and start
+./mcp-stop.sh    # stop
+podman logs -f cfd-trading   # logs (production container)
+```
+
+For local development (build from source after uncommitted changes):
+
+```bash
 cd ~/dev/trading/cfd-trading
 podman-compose -f podman-compose.dev.yml up --build -d
-
-# Stop
-podman-compose -f podman-compose.dev.yml down
-
-# Logs
 podman logs -f cfd-trading-dev
 ```
 
@@ -125,5 +128,5 @@ At the start of every implementation session:
 1. Read `README.md` — confirm you understand the current design state
 2. Read `TODO.md` — identify what is in progress and what is next
 3. Check `git status` — understand what has already been changed
-4. Verify containers are running: `podman ps` — should show `cfd-trading-dev` and `capital-mcp-server`
+4. Verify containers are running: `podman ps` — should show `cfd-trading` and `capital-mcp-server`
 5. Ask if anything is unclear before writing a single line of code

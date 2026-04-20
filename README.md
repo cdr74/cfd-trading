@@ -486,7 +486,7 @@ From the `trading/` workspace root:
 ./mcp-fix-config.sh  # restores mcpServers block if Claude Desktop overwrites the config
 ```
 
-### Manual start (dev — builds from source)
+### Manual start (dev — builds from source, for local changes not yet pushed)
 
 Build context must be the `trading/` parent directory (includes sibling repos):
 
@@ -498,13 +498,16 @@ podman-compose -f podman-compose.dev.yml up --build -d
 ### Manual stop
 
 ```bash
-podman-compose -f podman-compose.dev.yml down
+podman-compose down          # production container (cfd-trading)
+# or
+podman-compose -f podman-compose.dev.yml down   # dev container (cfd-trading-dev)
 ```
 
 ### Logs
 
 ```bash
-podman logs -f cfd-trading-dev
+podman logs -f cfd-trading       # production container
+podman logs -f cfd-trading-dev   # dev container
 ```
 
 ### Claude Desktop config note

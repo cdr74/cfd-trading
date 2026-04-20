@@ -183,7 +183,7 @@ Both MCP servers run as Podman containers serving streamable-HTTP over HTTPS, wi
   - `capital-mcp-server`: `https://localhost:8088/mcp`
 - [x] TLS certs generated with mkcert in `trading/certs/`; mkcert root CA imported into Windows Trusted Root store for Claude Desktop trust
 - [x] Both containers verified running and responding on `https://.../mcp`
-- [x] `mcp-start.sh` builds both servers from source (no image pull) so local fixes are always active
+- [x] `mcp-start.sh` pulls pre-built images from ghcr.io; `publish.yml` builds and pushes on every push to main
 - [ ] Run full end-to-end smoke tests — see `SMOKE_TESTS.md` in workspace root (SM-01 through SM-11)
 
 ---
