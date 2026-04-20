@@ -110,6 +110,8 @@ podman logs -f cfd-trading-dev
 
 MCP endpoint: `https://localhost:8089/mcp`
 
+**Path env vars:** `CONFIG_DIR`, `DB_PATH`, and `AUDIT_LOG_PATH` are set as `ENV` defaults in the Containerfile (`/app/config`, `/app/data/trading.db`, `/app/data/audit.jsonl`). Do not rely on `Path(__file__).parents[N]` for these — the package is pip-installed so `__file__` points to the site-packages dir, not the source tree.
+
 **Important:** After any change to `server.py` or `tools/`, rebuild the container — the running image will not pick up source changes automatically.
 
 **Venv note:** The local `.venv` is used for running tests only, not for serving. Because `capital-com-mcp-server` depends on `capital-com-client @ git+https://...` (a private repo), pip cannot resolve it automatically. Install the local clone manually:

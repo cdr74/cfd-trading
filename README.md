@@ -406,7 +406,11 @@ CAPITAL_IDENTIFIER=
 CAPITAL_API_KEY_PASSWORD=
 MONITOR_INTERVAL_SECONDS=60
 LOG_LEVEL=INFO
-AUDIT_LOG_PATH=./data/audit.jsonl
+
+# Paths — defaults are set as ENV in Containerfile; only override if running outside the container
+# CONFIG_DIR=./config
+# DB_PATH=./data/trading.db
+# AUDIT_LOG_PATH=./data/audit.jsonl
 ```
 
 ---
