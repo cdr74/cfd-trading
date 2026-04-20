@@ -167,7 +167,7 @@ Automated integration tests on every push.
   - [x] Required secrets: `GH_PAT` (private repo checkout), `CAPITAL_BASE_URL`, `CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`, `CAPITAL_API_KEY_PASSWORD`
   - [x] `anthropic` dependency removed — monitor is a pure rule engine, no API calls at runtime
   - [x] Both unit and integration CI jobs passing green
-- [ ] Add container build + push job (build image, push to ghcr.io on tag)
+- [x] Add container build + push job — `publish.yml` builds and pushes to `ghcr.io/cdr74/cfd-trading` on every push to main; `mcp-start.sh` now pulls pre-built images
 
 ---
 

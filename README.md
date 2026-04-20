@@ -480,7 +480,7 @@ The MCP server runs as a **Podman container** exposing a streamable-HTTP endpoin
 From the `trading/` workspace root:
 
 ```bash
-./mcp-start.sh    # pulls latest images, rebuilds cfd-trading from source, starts both containers
+./mcp-start.sh    # pulls latest images from ghcr.io and starts both containers
 ./mcp-stop.sh     # stops both containers
 ./mcp-status.sh   # full health check: containers, endpoints, credentials, Desktop config
 ./mcp-fix-config.sh  # restores mcpServers block if Claude Desktop overwrites the config
