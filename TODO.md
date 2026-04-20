@@ -173,18 +173,17 @@ Automated integration tests on every push.
 
 ## Phase 8 — Container Deployment + MCP Wiring ✓
 
-Both MCP servers run as Podman containers and are wired to Claude Desktop via SSE.
+Both MCP servers run as Podman containers serving streamable-HTTP over HTTPS, wired to Claude Desktop.
 
 - [x] `Containerfile` — multi-repo build context (parent `trading/` dir); installs full dep chain without internet access
-- [x] `podman-compose.yml` — production compose (builds from source, overrides CMD with `--sse`)
-- [x] `podman-compose.dev.yml` — dev compose (builds from source, sets `MCP_TRANSPORT=sse`)
-- [x] `server.py` — `load_dotenv()` added; `MCP_HOST`, `MCP_PORT`, `MCP_TRANSPORT` env vars wired
-- [x] Claude Desktop config (`claude_desktop_config.json`) — both servers wired as SSE endpoints
-  - `cfd-trading`: `http://localhost:8089/sse`
-  - `capital-mcp-server`: `http://localhost:8088/sse`
-- [x] Both containers verified running and responding on `/sse`
+- [x] `podman-compose.dev.yml` — dev compose (builds from source, sets `MCP_TRANSPORT=streamable-http`, mounts `../certs`)
+- [x] `server.py` — `MCP_HOST`, `MCP_PORT`, `MCP_TRANSPORT`, `SSL_CERTFILE`, `SSL_KEYFILE` env vars wired; HTTPS via uvicorn when SSL vars set
+- [x] Claude Desktop config (`claude_desktop_config.json`) — both servers wired as streamable-HTTP endpoints
+  - `cfd-trading`: `https://localhost:8089/mcp`
+  - `capital-mcp-server`: `https://localhost:8088/mcp`
+- [x] TLS certs generated with mkcert in `trading/certs/`; mkcert root CA imported into Windows Trusted Root store for Claude Desktop trust
+- [x] Both containers verified running and responding on `https://.../mcp`
 - [x] `mcp-start.sh` builds both servers from source (no image pull) so local fixes are always active
-- [ ] **BLOCKED** — Claude Desktop still shows "some MCP servers could not be loaded" despite SSE transport, correct URLs, and both containers healthy. Requires further troubleshooting next session.
 - [ ] Run full end-to-end smoke tests — see `SMOKE_TESTS.md` in workspace root (SM-01 through SM-11)
 
 ---

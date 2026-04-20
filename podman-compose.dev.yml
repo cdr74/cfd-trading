@@ -13,17 +13,20 @@ services:
       dockerfile: cfd-trading/Containerfile
     container_name: cfd-trading-dev
     ports:
-      - "8089:8089"   # host_port:container_port — SSE endpoint: http://localhost:8089/sse
+      - "8089:8089"   # host_port:container_port — HTTPS endpoint: https://localhost:8089/mcp
     env_file:
       - .env
     environment:
-      - MCP_TRANSPORT=sse
+      - MCP_TRANSPORT=streamable-http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8089
       - LOG_LEVEL=DEBUG
+      - SSL_CERTFILE=/certs/cert.pem
+      - SSL_KEYFILE=/certs/key.pem
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ../certs:/certs:ro
     restart: unless-stopped
     logging:
       driver: "journald"

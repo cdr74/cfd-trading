@@ -79,43 +79,13 @@ pytest tests/integration/ -m trade -v   # only when explicitly testing execution
 
 ## 4. Human Smoke Tests — Session Verification Checklist
 
-After each major component is implemented, a human smoke test verifies the system behaves correctly end-to-end. These tests cannot be automated — they require human judgement and observation.
+The authoritative smoke test guide is **`SMOKE_TESTS.md`** in the workspace root (`~/dev/trading/SMOKE_TESTS.md`). It covers SM-01 through SM-11 with full steps, pass criteria, and the test matrix.
 
-Each smoke test section lives in the relevant module's docstring or in a dedicated `docs/smoke_tests/` file. The format is always:
+Run `./mcp-start.sh` and `./mcp-status.sh` from the workspace root before any smoke test session. If the Claude Desktop config check fails, run `./mcp-fix-config.sh` and restart Claude Desktop.
 
-```
-PRECONDITIONS  — what must be true before starting
-STEPS          — exact actions to take, numbered
-EXPECTED       — what you should see at each step
-PASS CRITERIA  — what constitutes a successful test
-CLEANUP        — how to restore state after the test
-```
+The tests progress from infrastructure checks (SM-01: container health, SM-02: MCP discovery) through read-only broker calls (SM-03 to SM-05: session start, market scan, instrument analysis), proposal validation (SM-06/07), and finally live demo trades (SM-08: execute, SM-09: monitor cycle, SM-10/11: session end variants).
 
-**Core smoke tests to define as each component is built:**
-
-### SM-01 — Session Start
-Verify `start_session` authenticates, detects open positions, and starts the monitor subprocess correctly.
-
-### SM-02 — Market Scan
-Verify `scan_markets` returns a ranked list of instruments with plausible ATR and trend data. Confirm the output makes sense given current market conditions.
-
-### SM-03 — Strategy Analysis
-Verify `analyze_instrument` returns structured context that Claude can reason over. Confirm Claude's strategy recommendation is coherent.
-
-### SM-04 — Proposal + Preflight
-Verify `validate_proposal` correctly accepts a valid proposal and rejects one that violates risk bounds. Confirm Claude's proposal JSON matches the schema in README.md.
-
-### SM-05 — Trade Execution (demo only)
-Verify `execute_trade` opens a real position on the demo account. Confirm the deal appears in Capital.com and in the local SQLite DB.
-
-### SM-06 — Monitor Cycle
-Verify `monitor.py` runs at the configured interval. Confirm it fetches live positions, evaluates rules, and writes a cycle snapshot to the DB. Observe at least one HOLD decision in the logs.
-
-### SM-07 — Session End (close)
-Verify `end_session(close_positions=True)` stops the monitor, closes all open positions, and writes the session summary.
-
-### SM-08 — Session End (leave open)
-Verify `end_session(close_positions=False)` stops the monitor, leaves positions open at Capital.com with stop losses registered, and writes the session summary.
+**Demo account required for SM-03 onwards.** All execution tests (SM-08 and above) modify broker state on the demo account.
 
 ---
 
@@ -135,7 +105,7 @@ podman-compose -f podman-compose.dev.yml down
 podman logs -f cfd-trading-dev
 ```
 
-MCP endpoint: `http://localhost:8089/sse`
+MCP endpoint: `https://localhost:8089/mcp`
 
 **Important:** After any change to `server.py` or `tools/`, rebuild the container — the running image will not pick up source changes automatically.
 

@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir --no-deps ./capital-mcp-server/ \
 
 COPY cfd-trading/pyproject.toml cfd-trading/README.md ./
 COPY cfd-trading/src/ ./src/
+COPY cfd-trading/config/ ./config/
 RUN pip install --no-cache-dir --no-deps . \
     && pip install --no-cache-dir \
         "anthropic>=0.40.0" \
@@ -36,6 +37,8 @@ ENV MCP_TRANSPORT=streamable-http
 ENV MCP_HOST=0.0.0.0
 ENV MCP_PORT=8089
 ENV LOG_LEVEL=INFO
+ENV SSL_CERTFILE=/certs/cert.pem
+ENV SSL_KEYFILE=/certs/key.pem
 
 EXPOSE 8089
 

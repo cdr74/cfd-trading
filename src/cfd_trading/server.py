@@ -34,7 +34,23 @@ mcp.tool()(execute_trade)
 
 def main():
     transport = os.getenv("MCP_TRANSPORT", "stdio")
-    mcp.run(transport=transport)
+    ssl_certfile = os.getenv("SSL_CERTFILE")
+    ssl_keyfile = os.getenv("SSL_KEYFILE")
+
+    if transport == "streamable-http" and ssl_certfile and ssl_keyfile:
+        import uvicorn
+        logging.getLogger(__name__).info(f"Using streamable HTTPS transport on port {mcp.settings.port}")
+        config = uvicorn.Config(
+            mcp.streamable_http_app(),
+            host=mcp.settings.host,
+            port=mcp.settings.port,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            log_level=mcp.settings.log_level.lower(),
+        )
+        uvicorn.Server(config).run()
+    else:
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":
