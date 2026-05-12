@@ -66,6 +66,16 @@ class TestMomentumSignal:
         # slope of the full series is negative; crossover (if any) should be suppressed
         assert result != "LONG"
 
+    def test_gap_filter_suppresses_tiny_crossover(self):
+        # Spike of 0.1% — produces a crossover but EMA gap < 0.15% minimum
+        bars = _flat_then_spike(21, 1.0, 1.001)
+        assert momentum_signal(bars) is None
+
+    def test_gap_filter_allows_large_crossover(self):
+        # Spike of 10% — EMA gap well above 0.15% minimum
+        bars = _flat_then_spike(21, 1.0, 1.10)
+        assert momentum_signal(bars) == "LONG"
+
     def test_returns_string_not_bool(self):
         bars = _flat_then_spike(21, 1.0, 1.10)
         result = momentum_signal(bars)

@@ -149,6 +149,8 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 
 **Implementation note:** EMA_9, EMA_21 are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). `signal_t` (EMA_9 − EMA_21) and trend slope are also returned. The normalised z_t (signal_t / rolling_std) is not yet computed — Claude reasons qualitatively over the gap instead.
 
+**Backtest signal note:** The deterministic backtest approximation (`backtest/signals.py`) adds a minimum EMA gap filter: the signal is suppressed if `|EMA_9 − EMA_21| / EMA_21 < 0.15%`. This guards against noise crossovers on M1 bars where the two EMAs are nearly identical. The threshold is configurable via `_MIN_EMA_GAP_PCT` in `signals.py`.
+
 ### 5.3 Stop Loss & Take Profit Rules
 
 | Parameter | Rule | YAML field |

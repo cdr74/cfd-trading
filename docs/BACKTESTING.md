@@ -162,6 +162,8 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. For example, a bullish EMA crossover in a sequence where the dominant slope is negative returns `None`. This prevents late-entry signals at trend exhaustion.
 
+**Key detail — EMA gap filter:** Even when a crossover occurs, the signal is suppressed if the fractional gap between EMA_9 and EMA_21 is below 0.15% of EMA_21. On M1 bars the two EMAs are nearly identical most of the time; a sub-threshold gap means the "crossover" is noise rather than real momentum divergence. This filter eliminates the majority of false signals at high signal-frequency instruments (crypto, indices).
+
 **Indicator formulas:**
 
 ```
@@ -352,7 +354,7 @@ GOLD      mean_reversion  44      59.1%   1.72    3.1      9.1%    2.93
 
 All tests use synthetic bar sequences — no real DB file or network access required.
 
-### 7.1 `tests/unit/test_signals.py` (13 tests)
+### 7.1 `tests/unit/test_signals.py` (17 tests)
 
 Tests for `backtest/signals.py`:
 
@@ -365,7 +367,10 @@ Tests for `backtest/signals.py`:
 | `test_no_signal_when_ema9_already_above_ema21` | Monotonically rising 40-bar sequence — crossover happened before the window → `None` |
 | `test_no_signal_when_ema9_already_below_ema21` | Monotonically falling sequence — same logic, `None` |
 | `test_long_requires_positive_slope` | Sharp fall then small uptick — upward crossover exists but overall slope is negative → not `"LONG"` |
+| `test_gap_filter_suppresses_tiny_crossover` | Spike of 0.1% produces a crossover but EMA gap < 0.15% minimum → `None` |
+| `test_gap_filter_allows_large_crossover` | Spike of 10% → EMA gap well above 0.15% minimum → `"LONG"` |
 | `test_returns_string_not_bool` | Return type is `str`, not `bool` |
+| `test_no_signal_when_z_within_threshold` | Flat prices → z-score = 0 → `None` |
 | `test_short_when_z_exceeds_positive_threshold` | 19 bars at 1.0 + spike to 1.5 → large positive z → `"SHORT"` |
 | `test_long_when_z_exceeds_negative_threshold` | 19 bars at 1.0 + drop to 0.5 → large negative z → `"LONG"` |
 | `test_no_signal_when_price_within_two_sigma` | Alternating 0.02 oscillation → z near 0 → `None` |
@@ -437,7 +442,7 @@ pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.
 pytest tests/unit/ -v
 ```
 
-All 190 unit tests pass with no network access or real DB file.
+All 192 unit tests pass with no network access or real DB file.
 
 ---
 
@@ -474,7 +479,7 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 |---------|-------------|--------|
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
-| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or require wider EMA gap (momentum) |
+| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, currently 0.15%) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |

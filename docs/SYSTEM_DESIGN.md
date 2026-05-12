@@ -307,7 +307,7 @@ cfd-trading/
 │       ├── scan_tools.py            # scan_markets, analyze_instrument
 │       └── trade_tools.py           # validate_proposal, execute_trade
 ├── tests/
-│   ├── unit/                        # 190 tests — preflight, monitor, tools, backtest
+│   ├── unit/                        # 192 tests — preflight, monitor, tools, backtest
 │   └── integration/                 # against Capital.com demo API
 ├── integration-test/
 │   ├── mcp-start.sh / mcp-stop.sh
@@ -491,7 +491,7 @@ ohlc_bars (
 | 7 | GitHub Actions CI | **Done** | Unit tests always; integration tests on push with demo secrets; `publish.yml` builds + pushes container image |
 | 8 | Container deployment + MCP wiring | **Done** | Podman container on port 8089; Claude Desktop wired; SM-01–SM-11 smoke tests passed |
 | 9 | Scan/analysis improvements | **Done** | Removed session labels; added EMA_9/21 + z-score to `analyze_instrument`; vol-scaled `suggested_size` via `target_risk_pct` |
-| 10 | Backtesting framework | **Done** | `fetch_ohlc.py` (Windows/MT5, 1.1M bars); engine + signals + CLI runner; 190 unit tests total |
+| 10 | Backtesting framework | **Done** | `fetch_ohlc.py` (Windows/MT5, 1.1M bars); engine + signals + CLI runner; EMA gap filter added; 192 unit tests total |
 
 ---
 

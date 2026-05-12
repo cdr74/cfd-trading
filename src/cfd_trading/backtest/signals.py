@@ -14,6 +14,10 @@ from cfd_trading.storage.repository import OHLCBar
 _MIN_BARS_MOMENTUM = 22       # EMA_21 needs 21 bars; crossover needs one prior bar
 _MIN_BARS_MEAN_REVERSION = 20  # z-score window
 
+# Minimum fractional gap between EMA9 and EMA21 at the moment of crossover.
+# Filters noise crossovers where the two EMAs are nearly identical on M1 bars.
+_MIN_EMA_GAP_PCT = 0.0015   # 0.15%
+
 
 def momentum_signal(bars: list[OHLCBar]) -> str | None:
     """Return LONG/SHORT on an EMA_9/EMA_21 crossover confirmed by trend slope, else None."""
@@ -29,6 +33,10 @@ def momentum_signal(bars: list[OHLCBar]) -> str | None:
     ema21_curr = _ema(closes_curr, 21)
 
     if any(v is None for v in (ema9_prev, ema21_prev, ema9_curr, ema21_curr)):
+        return None
+
+    gap_pct = abs(ema9_curr - ema21_curr) / ema21_curr
+    if gap_pct < _MIN_EMA_GAP_PCT:
         return None
 
     slope = _trend_slope(closes_curr)
