@@ -104,6 +104,18 @@ def run_backtest(
             elif action == "ADJUST" and new_stop is not None:
                 current_stop = new_stop
 
+            # Signal-based exit: check after evaluate_position so hard stop takes priority
+            if open_trade is not None:
+                exit_reason = signal_state.check_exit()
+                if exit_reason:
+                    open_trade.exit_ts = bar.ts
+                    open_trade.exit_price = bar.close
+                    open_trade.exit_reason = exit_reason
+                    open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, bar.close)
+                    completed.append(open_trade)
+                    open_trade = None
+                    current_stop = None
+
         else:
             # --- Check entry signal ---
             if signal is not None and i + 1 < len(bars):

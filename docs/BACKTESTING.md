@@ -147,54 +147,65 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 ### 4.1 Momentum signal
 
-**Approximates:** EMA_9 crosses above/below EMA_21 with trend slope confirmation.
+**Approximates:** EMA_9 crosses above/below EMA_21 with trend slope confirmation and ADX regime gate.
 
-**Minimum bars:** 22 (EMA_21 needs 21 bars; crossover detection needs one prior bar).
+**Minimum bars:** 22 (EMA_21 seeds at bar 21; crossover needs one prior bar). With ADX(14) enabled the effective warm-up is ~28 bars before the gate can actively suppress non-trending signals.
 
 **Logic:**
 
 ```
-1. Compute EMA_9 and EMA_21 over all bars except the last (prev state)
-2. Compute EMA_9 and EMA_21 over all bars including the last (curr state)
-3. Compute linear trend slope over all close prices
-4. LONG  if EMA_9 crossed above EMA_21 in the last bar AND slope > 0
-5. SHORT if EMA_9 crossed below EMA_21 in the last bar AND slope < 0
-6. None otherwise (includes: already in trend, flat market, slope contradicts crossover)
+1. Compute EMA_9 and EMA_21 incrementally (O(1) Wilder-style)
+2. Compute ADX(14) incrementally
+3. Suppress if ADX is valid AND ADX < adx_threshold (non-trending market)
+4. Suppress if EMA gap < min_ema_gap_pct (noise crossover)
+5. Compute linear trend slope over the last 22 bars
+6. LONG  if EMA_9 crossed above EMA_21 AND slope > 0
+7. SHORT if EMA_9 crossed below EMA_21 AND slope < 0
+8. None otherwise
 ```
 
-**Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. For example, a bullish EMA crossover in a sequence where the dominant slope is negative returns `None`. This prevents late-entry signals at trend exhaustion.
+**Key detail — ADX regime gate:** Signal is suppressed when ADX(14) < 25 (default threshold). On M1 bars this detects whether the last 14 minutes are directionally trending. Passes unconditionally while ADX is warming up (first ~28 bars) to avoid missing early-session signals. Configurable via `signal_kwargs={"adx_threshold": value}` — set to `0.0` to disable entirely.
 
-**Key detail — EMA gap filter:** Even when a crossover occurs, the signal is suppressed if the fractional gap between EMA_9 and EMA_21 is below the `_MIN_EMA_GAP_PCT` threshold (default **0.02%**). On M1 bars the two EMAs are nearly identical most of the time; a sub-threshold gap means the "crossover" is noise rather than real momentum divergence.
+**Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. Prevents late-entry signals at trend exhaustion.
 
-Tuning the threshold (see `backtest/tune_momentum_gap.py`): values below 0.01% flood the engine with noise; values above 0.05% leave too few trades for statistical inference. 0.02% is the empirically optimal value across the 11-instrument watchlist — it yields adequate trade counts (71 trades on GOLD, 201 on XBRUSD) while suppressing the worst noise crossovers. The parameter is configurable per-run via `signal_kwargs={"min_ema_gap_pct": value}` in `run_backtest()`.
+**Key detail — EMA gap filter:** Suppresses near-identical EMA crossovers below `_MIN_EMA_GAP_PCT` (default **0.02%**). Tunable range: 0.01–0.05%. See `backtest/tune_momentum_gap.py`.
 
-**Key detail — slope window:** Slope is computed over a **fixed 22-bar window** (same as the EMA warm-up period), not over unbounded history. A 22-minute slope is the relevant confirmation horizon for an intraday M1 momentum entry; the multi-month slope over the full dataset is not meaningful for this decision.
+**Key detail — slope window:** Slope computed over a fixed **22-bar window**, not unbounded history.
 
 **Indicator formulas:**
 
 ```
 EMA(period) = SMA(first period bars) then α×price + (1−α)×prev_ema  where  α = 2/(period+1)
+ADX(14)     = Wilder-smoothed DX over 14 bars; DX = |+DI − −DI| / (+DI + −DI) × 100
 slope       = OLS regression coefficient of close prices over the last 22 bars
 gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.02% to fire)
 ```
 
+**`check_exit()`:** Always returns `None` — momentum exits are handled entirely by `evaluate_position()` (trailing stop, take profit, hard stop).
+
 ### 4.2 Mean reversion signal
 
-**Approximates:** Price overextended beyond 2 standard deviations from a 20-bar rolling mean.
+**Approximates:** Price overextended beyond 2 standard deviations from a 20-bar rolling mean, in a non-trending regime.
 
-**Minimum bars:** 20.
+**Minimum bars:** 20 (z-score window). ADX gate activates after ~28 bars.
 
 **Logic:**
 
 ```
 1. Compute z-score of the last close over the most recent 20 bars:
    z = (close - mean) / stddev
-2. SHORT if z >= +2.0  (price above mean by 2σ — fade the spike upward)
-3. LONG  if z <= -2.0  (price below mean by 2σ — fade the drop)
-4. None  if |z| < 2.0
+2. Cache z as last_z for check_exit()
+3. Suppress if ADX is valid AND ADX >= adx_threshold (trending market)
+4. SHORT if z >= +2.0  (price above mean by 2σ — fade the spike upward)
+5. LONG  if z <= -2.0  (price below mean by 2σ — fade the drop)
+6. None  if |z| < 2.0
 ```
 
-**Key detail — windowed z-score:** Only the last 20 bars contribute to `mean` and `stddev`. Older history is ignored. This means a long-running trend will eventually reset the z-score baseline, allowing signals to fire even in trending markets if the local 20-bar window becomes mean-reverting.
+**Key detail — ADX regime gate:** Signal is suppressed when ADX(14) ≥ 25. Mean reversion logic breaks down in trending markets — spreads diverge rather than converge. Set `adx_threshold=float("inf")` to disable. Passes while ADX is warming up.
+
+**Key detail — windowed z-score:** Only the last 20 bars contribute to `mean` and `stddev`. Older history is ignored.
+
+**`check_exit()`:** Returns `"Z-score midline"` when `abs(last_z) <= zscore_exit_threshold` (default **0.5**). Called by the engine on every bar while a mean reversion position is open. Fires when the expected reversion has materialised — z has returned inside ±0.5σ of the rolling mean. Hard stop and take profit in `evaluate_position()` take priority (checked first).
 
 **Indicator formula:**
 
@@ -451,7 +462,7 @@ Tests for `backtest/signals.py`:
 | `test_matches_functional_wrapper` (state) | `MeanReversionSignalState` and `mean_reversion_signal()` agree on last bar |
 | `test_no_signal_before_window_full` (state) | Returns `None` for the first 19 bars |
 
-### 7.2 `tests/unit/test_engine.py` (19 tests)
+### 7.2 `tests/unit/test_engine.py` (21 tests)
 
 Tests for `backtest/engine.py`:
 
@@ -488,8 +499,17 @@ Tests for `backtest/engine.py`:
 | `test_net_pnl_pts_is_sum_of_trade_pnl` | Single stop-out trade; `net_pnl_pts` equals `trade.pnl_points` and is negative |
 | `test_avg_r_computed_correctly` | Stop-out at 0.50 from entry 1.10; asserts `avg_r = net_pnl_pts / (1 × 1.10 × 0.02)` and is negative |
 | `test_avg_r_zero_when_no_trades` | Empty bars → `avg_r == 0.0` |
+| `test_mean_reversion_midline_exit` | 19 flat bars + 17 bars at 1.5; z drops to 0.5 at bar 34 (window mean rises) → `exit_reason == "Z-score midline"` |
+| `test_hard_stop_takes_priority_over_midline_exit` | Price crashes far beyond stop level → hard stop fires before `check_exit()` is reached |
 
-### 7.3 `tests/unit/test_run.py` (13 tests)
+### 7.3 `tests/unit/test_signals.py` additions
+
+| Test class | Tests added |
+|---|---|
+| `TestADXGate` | `test_momentum_suppressed_when_adx_below_threshold`, `test_momentum_fires_when_adx_gate_disabled`, `test_momentum_suppressed_by_high_explicit_threshold`, `test_mean_reversion_fires_in_flat_market`, `test_mean_reversion_suppressed_in_trending_market` |
+| `TestCheckExit` | `test_mean_reversion_check_exit_none_before_window_full`, `test_mean_reversion_check_exit_none_when_z_large`, `test_mean_reversion_check_exit_fires_when_z_small`, `test_momentum_check_exit_always_none` |
+
+### 7.4 `tests/unit/test_run.py` (13 tests)
 
 Tests for `backtest/run.py`:
 
@@ -508,7 +528,7 @@ Tests for `backtest/run.py`:
 | `test_main_missing_db_exits` | DB file absent → `sys.exit(1)`, error message on stderr contains `"not found"` |
 | `test_main_no_bars_skips_gracefully` | DB exists but `ohlc_bars` is empty → skip message printed, no crash, no results printed |
 
-### 7.4 Running the tests
+### 7.5 Running the tests
 
 ```bash
 cd ~/dev/trading/cfd-trading
@@ -517,11 +537,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (204 tests)
+# Full unit suite (215 tests)
 pytest tests/unit/ -v
 ```
 
-All 204 unit tests pass with no network access or real DB file.
+All 215 unit tests pass with no network access or real DB file.
 
 ---
 

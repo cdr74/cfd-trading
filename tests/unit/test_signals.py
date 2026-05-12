@@ -117,14 +117,19 @@ class TestMeanReversionSignal:
         assert mean_reversion_signal(_bars(closes)) is None
 
     def test_uses_last_20_bars_for_zscore(self):
-        # Old bars at high price, recent 20 bars at 1.0, final bar spikes down
-        # z-score should be based on the last 20 bars (recent window), not all history
+        # Old bars at high price, recent 20 bars at 1.0, final bar spikes down.
+        # Tests z-score window isolation only — ADX gate disabled (adx_threshold=inf)
+        # so the large trend in the old bars doesn't suppress the signal.
         old_bars = [100.0] * 30   # ignored by 20-bar window
         recent   = [1.0] * 19
         spike    = [0.5]
         bars = _bars(old_bars + recent + spike)
+        state = MeanReversionSignalState(adx_threshold=float("inf"))
+        result = None
+        for bar in bars:
+            result = state.update(bar)
         # z-score uses last 20: 19 bars at 1.0 + 1 bar at 0.5 → LONG
-        assert mean_reversion_signal(bars) == "LONG"
+        assert result == "LONG"
 
     def test_returns_string_not_bool(self):
         bars = _bars([1.0] * 19 + [1.5])
@@ -135,6 +140,108 @@ class TestMeanReversionSignal:
 # ---------------------------------------------------------------------------
 # Stateful class tests — verify incremental O(1) classes match functional wrappers
 # ---------------------------------------------------------------------------
+
+class TestADXGate:
+    """ADX regime gate — verified against both signal state classes."""
+
+    def test_momentum_suppressed_when_adx_below_threshold(self):
+        # 99 flat bars + 1 spike → EMA crossover fires but ADX ≈ 0 (non-trending)
+        # Default adx_threshold=25; ADX stays near 0 → gate suppresses signal
+        state = MomentumSignalState()
+        bars = _bars([1.0] * 99 + [1.10])
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result is None
+
+    def test_momentum_fires_when_adx_gate_disabled(self):
+        # Same flat+spike sequence but with gate off (threshold=0) → signal fires
+        state = MomentumSignalState(adx_threshold=0.0)
+        bars = _flat_then_spike(21, 1.0, 1.10)
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result == "LONG"
+
+    def test_momentum_suppressed_by_high_explicit_threshold(self):
+        # 80 flat bars (ADX→0), then 19 rising bars, then spike:
+        # ADX climbs to ~78 from the trend, but threshold=100 → still suppressed
+        rising = [1.0 + i * 0.01 for i in range(1, 20)]  # 1.01..1.19
+        state = MomentumSignalState(adx_threshold=100.0)
+        bars = _bars([1.0] * 80 + rising + [2.0])
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result is None
+
+    def test_mean_reversion_fires_in_flat_market(self):
+        # 19 flat bars + spike: ADX ≈ 0 (non-trending) → gate passes → signal fires
+        state = MeanReversionSignalState()
+        bars = _bars([1.0] * 19 + [1.5])
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result == "SHORT"
+
+    def test_mean_reversion_suppressed_in_trending_market(self):
+        # 80 flat at 1.0, then 19 strongly rising bars, then a spike up:
+        # ADX ≈ 78 (trending) AND z-score ≥ 2.0 → gate suppresses signal
+        # With gate disabled (threshold=inf) the same sequence fires.
+        rising = [1.0 + i * 0.01 for i in range(1, 20)]  # 1.01..1.19
+        spike  = [2.0]
+        bars   = _bars([1.0] * 80 + rising + spike)
+
+        # Gate active (default threshold=25): should be suppressed
+        state_gated = MeanReversionSignalState()
+        result_gated = None
+        for bar in bars:
+            result_gated = state_gated.update(bar)
+        assert result_gated is None
+
+        # Gate disabled (threshold=inf): should fire
+        state_open = MeanReversionSignalState(adx_threshold=float("inf"))
+        result_open = None
+        for bar in bars:
+            result_open = state_open.update(bar)
+        assert result_open == "SHORT"
+
+
+class TestCheckExit:
+    """check_exit() — z-score midline exit for mean reversion."""
+
+    def _bar(self, price: float, ts: int = 0) -> OHLCBar:
+        return OHLCBar(epic="EURUSD", resolution="M1", ts=ts,
+                       open=price, high=price, low=price, close=price, volume=100)
+
+    def test_mean_reversion_check_exit_none_before_window_full(self):
+        state = MeanReversionSignalState()
+        for i, bar in enumerate(_bars([1.0] * 19)):
+            state.update(bar)
+        assert state.check_exit() is None
+
+    def test_mean_reversion_check_exit_none_when_z_large(self):
+        # After spike, z is large → midline not reached → no exit
+        state = MeanReversionSignalState()
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        assert state.check_exit() is None
+
+    def test_mean_reversion_check_exit_fires_when_z_small(self):
+        # After spike, price reverts to baseline → z drops inside ±0.5 → exit fires
+        state = MeanReversionSignalState()
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        # Feed one reversion bar: window now has the spike + new close at 1.0;
+        # z for 1.0 relative to the slightly shifted mean is ~-0.23 → abs ≤ 0.5
+        state.update(_bars([1.0])[0])
+        assert state.check_exit() == "Z-score midline"
+
+    def test_momentum_check_exit_always_none(self):
+        state = MomentumSignalState()
+        for bar in _flat_then_spike(21, 1.0, 1.10):
+            state.update(bar)
+        assert state.check_exit() is None
+
 
 class TestMomentumSignalState:
 

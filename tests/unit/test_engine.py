@@ -278,3 +278,27 @@ class TestMetrics:
     def test_avg_r_zero_when_no_trades(self, momentum_cfg):
         result = run_backtest("EURUSD", "momentum", [], momentum_cfg, RISK_CFG)
         assert result.avg_r == 0.0
+
+    def test_mean_reversion_midline_exit(self, mean_rev_cfg):
+        # SHORT signal fires at bar 19 (z=4.36).  Entry at bar 20 (open=1.5).
+        # Price stays at 1.5; evaluate_position never fires TP because TP=1.455 < 1.5
+        # (SELL TP fires when close <= profitLevel).
+        # After 16 bars of 1.5 accumulate in the 20-bar window the mean rises to 1.4
+        # and z drops to 0.5 → check_exit fires "Z-score midline".
+        # window at bar 34: [1.0]*4 + [1.5]*16, mean=1.4, sigma=0.2, z=0.5
+        bars = _bars([1.0] * 19 + [1.5] * 17)   # 36 bars; midline fires at bar 34
+
+        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert result.trades[0].exit_reason == "Z-score midline"
+
+    def test_hard_stop_takes_priority_over_midline_exit(self, mean_rev_cfg):
+        # Hard stop fires before check_exit is reached (open_trade is set to None first)
+        signal_bars = _bars([1.0] * 19 + [1.5])
+        entry_bar   = _bar(20 * 60, 1.5)
+        crash_bar   = _bar(21 * 60, 5.0)   # SELL stop = 1.5225; 5.0 >> stop → hard stop
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert "Hard stop" in result.trades[0].exit_reason
