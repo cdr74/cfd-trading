@@ -26,7 +26,7 @@ from cfd_trading.strategy.loader import load_strategy, list_strategies
 from cfd_trading.backtest.engine import run_backtest, BacktestResult
 
 _DEFAULT_DB_PATH = "/mnt/c/Users/chris/dev/trading-data/trading.db"
-_CONFIG_DIR = Path(os.getenv("CONFIG_DIR", str(Path(__file__).parents[4] / "config")))
+_CONFIG_DIR = Path(os.getenv("CONFIG_DIR", str(Path(__file__).parents[3] / "config")))
 
 
 def main() -> None:
