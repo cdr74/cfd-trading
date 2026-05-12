@@ -288,6 +288,7 @@ No spread, commission, or contract size is applied. All metrics in `BacktestResu
 | `max_drawdown_pct` | `float` | Peak-to-trough cumulative P&L loss as % of average entry price |
 | `stop_out_rate` | `float` | Fraction of trades closed by hard stop |
 | `signal_frequency` | `float` | Trades per week over the full bar span |
+| `net_pnl_pts` | `float` | Sum of all `pnl_points`; positive = net profit, negative = net loss (in price units) |
 | `trades` | `list[Trade]` | Full trade-level detail |
 
 Each `Trade` record contains: `epic`, `strategy`, `direction` (BUY/SELL), `entry_ts`, `entry_price`, `stop_loss`, `take_profit`, `exit_ts`, `exit_price`, `exit_reason`, `pnl_points`.
@@ -338,15 +339,17 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 ### 6.4 Sample output
 
 ```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk
---------  --------------  ------  ------  ------  -------  ------  -------
-EURUSD    momentum        42      54.8%   1.32    4.2      23.8%   2.80
-GBPUSD    momentum        38      52.6%   1.18    5.1      28.9%   2.53
-GOLD      momentum        57      56.1%   1.45    3.8      19.3%   3.80
-EURUSD    mean_reversion  29      58.6%   1.61    2.7      10.3%   1.93
-GBPUSD    mean_reversion  31      51.6%   1.09    4.5      16.1%   2.07
-GOLD      mean_reversion  44      59.1%   1.72    3.1      9.1%    2.93
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   NetPts
+--------  --------------  ------  ------  ------  -------  ------  -------  ---------
+EURUSD    momentum        42      54.8%   1.32    4.2      23.8%   2.80     +0.1843
+GBPUSD    momentum        38      52.6%   1.18    5.1      28.9%   2.53     +0.0712
+GOLD      momentum        57      56.1%   1.45    3.8      19.3%   3.80     +34.2100
+EURUSD    mean_reversion  29      58.6%   1.61    2.7      10.3%   1.93     +0.2314
+GBPUSD    mean_reversion  31      51.6%   1.09    4.5      16.1%   2.07     +0.0381
+GOLD      mean_reversion  44      59.1%   1.72    3.1      9.1%    2.93     +47.9830
 ```
+
+`NetPts` is in raw price units — the same scale as the instrument price. EURUSD trades in the range 1.05–1.15, so a net of `+0.18` represents about 180 pips total. GOLD trades near 2000 USD/oz, so `+34.21` is about 17 pips (1 point = 1 USD/oz).
 
 ---
 
@@ -376,7 +379,7 @@ Tests for `backtest/signals.py`:
 | `test_no_signal_when_price_within_two_sigma` | Alternating 0.02 oscillation → z near 0 → `None` |
 | `test_uses_last_20_bars_for_zscore` | 30 bars at 100.0 (old history), 19 bars at 1.0, spike to 0.5 → z-score based on the last 20 bars only → `"LONG"` (not distorted by old history) |
 
-### 7.2 `tests/unit/test_engine.py` (16 tests)
+### 7.2 `tests/unit/test_engine.py` (18 tests)
 
 Tests for `backtest/engine.py`:
 
@@ -410,8 +413,10 @@ Tests for `backtest/engine.py`:
 | `test_profit_factor_with_winning_trade` | All winning trades → `profit_factor == inf` |
 | `test_empty_bars_returns_zero_trades` | Empty bar list → all metrics zero, no crash |
 | `test_result_fields_populated` | `epic` and `strategy` fields copied correctly to result |
+| `test_net_pnl_pts_is_sum_of_trade_pnl` | Single stop-out trade; `net_pnl_pts` equals `trade.pnl_points` and is negative |
+| `test_net_pnl_pts_zero_when_no_trades` | Empty bars → `net_pnl_pts == 0.0` |
 
-### 7.3 `tests/unit/test_run.py` (11 tests)
+### 7.3 `tests/unit/test_run.py` (13 tests)
 
 Tests for `backtest/run.py`:
 
@@ -422,7 +427,8 @@ Tests for `backtest/run.py`:
 | `test_resolve_epics_single` | `--epic EURUSD` → `["EURUSD"]` |
 | `test_resolve_epics_all` | `--all-epics` reads `watchlist.yaml` and flattens all groups into a single list |
 | `test_load_risk` | `_load_risk()` parses `risk.yaml` correctly |
-| `test_print_table_no_crash` | Table output contains epic name, strategy name, formatted win rate (`60.0%`), formatted PF (`1.80`) |
+| `test_print_table_no_crash` | Table output contains epic name, strategy name, formatted win rate (`60.0%`), formatted PF (`1.80`), and NetPts with sign (`+0.1234`) |
+| `test_print_table_net_pts_negative` | Negative `net_pnl_pts` renders as `-0.0567` |
 | `test_print_table_inf_profit_factor` | `profit_factor = inf` renders as `"inf"` without crashing |
 | `test_print_table_zero_trades` | Zero-trade result renders without division errors |
 | `test_main_single_epic_strategy` | Full `main()` with a real in-memory SQLite DB and minimal config dir — no exceptions, table printed |
@@ -442,7 +448,7 @@ pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.
 pytest tests/unit/ -v
 ```
 
-All 192 unit tests pass with no network access or real DB file.
+All 195 unit tests pass with no network access or real DB file.
 
 ---
 
@@ -458,53 +464,116 @@ All 192 unit tests pass with no network access or real DB file.
 | `MaxDD%` | Largest peak-to-trough equity drop as % of average entry price | High MaxDD% relative to PF indicates the strategy earns slowly and loses fast — unfavourable |
 | `Stop%` | % of trades closed by hard stop | Very high Stop% (> 50%) suggests signal is firing into adverse conditions or stop distance is too tight |
 | `Sig/wk` | Average entry signals per week | < 1: strategy is too selective for the instrument; > 10: signals may be noise |
+| `NetPts` | Sum of all trade P&L in raw price units | Positive = net profitable; negative = net loss. Scale varies by instrument (see §8.6) |
 
-### 8.2 What good results look like
+### 8.2 Calculating net win/loss
+
+`NetPts` is the direct bottom line: `sum(exit_price − entry_price)` for BUY trades and `sum(entry_price − exit_price)` for SELL trades, across all completed trades. It is in **raw price units**, not currency.
+
+**Converting NetPts to currency:**
+
+```
+currency_pnl = NetPts × contract_size × position_size_lots
+```
+
+Where `contract_size` depends on the instrument:
+
+| Instrument class | Typical contract size | Example |
+|-----------------|----------------------|---------|
+| FX (EURUSD, GBPUSD) | 100,000 base units per lot | `NetPts=+0.018 × 100,000 × 0.1 lot = +$180` |
+| FX (USDJPY) | 100,000 USD per lot | 1 pip = 0.01; `NetPts=+1.5 × 100,000 × 0.1 = +$15,000` (note: USDJPY in pips ÷ 100) |
+| Indices (US500, DE40, UK100) | $1–$10 per point per lot | Varies by broker/product |
+| GOLD (XAUUSD) | 100 oz per lot | `NetPts=+34.21 × 100 × 0.1 = +$342.10` |
+| XBRUSD (Brent oil) | 1,000 bbls per lot | `NetPts=+2.1 × 1,000 × 0.1 = +$210` |
+| Crypto (BTCUSD, ETHUSD) | 1 coin per lot | `NetPts=+500 × 1 × 0.1 = +$50` |
+
+The backtest uses no position sizing (`target_risk_pct` is not applied), so `NetPts` represents a 1-lot, 1-unit position throughout. Multiply by your intended size to estimate actual P&L.
+
+**Relating NetPts to PF:**
+
+```
+NetPts = gross_profit − gross_loss
+       = gross_loss × (PF − 1)
+```
+
+A PF of 1.3 means for every 1 point lost, 1.3 points are won — net 0.3 points per unit of risk. `NetPts` gives you the cumulative total of those net gains across all trades in the dataset.
+
+**Break-even win rate:**
+
+Given your R:R ratio (from `min_rr_ratio` in the YAML), the minimum win rate needed to break even is:
+
+```
+break_even_win_rate = 1 / (1 + min_rr_ratio)
+```
+
+| `min_rr_ratio` | Break-even Win% |
+|---------------|----------------|
+| 1.5 (momentum) | 40.0% |
+| 2.0 (mean reversion) | 33.3% |
+
+Any Win% above these thresholds with consistent trade count is generating positive expectancy.
+
+### 8.3 What good results look like
 
 **Minimum bar for confidence:** at least 30 completed trades. Below 20 trades, treat metrics as indicative only.
 
 **Healthy momentum run:**
 ```
-Win% 48–60%  |  PF 1.3–2.0  |  MaxDD% < 6%  |  Stop% 20–40%  |  Sig/wk 1–5
+Win% 48–60%  |  PF 1.3–2.0  |  MaxDD% < 6%  |  Stop% 20–40%  |  Sig/wk 1–5  |  NetPts > 0
 ```
 
 **Healthy mean reversion run:**
 ```
-Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1–4
+Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1–4  |  NetPts > 0
 ```
 
-### 8.3 Warning signs
+### 8.4 Warning signs
 
 | Pattern | Likely cause | Action |
 |---------|-------------|--------|
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
+| NetPts negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
 | Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, currently 0.15%) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |
 | `0` trades on an instrument | No bars in DB for this epic | Run `fetch_ohlc.py` on Windows to populate |
+| Large positive NetPts but small PF (e.g. 1.05) | P&L dominated by a few big winners, not consistent edge | Check individual trades; strategy may be high-variance / lucky |
 
-### 8.4 Instrument characteristics
+### 8.5 Instrument characteristics
 
 Based on the current 3-month M1 dataset:
 
 | Instrument class | Momentum suitability | Mean reversion suitability | Notes |
 |-----------------|---------------------|--------------------------|-------|
-| FX (EURUSD, GBPUSD, EURGBP) | Moderate — trends form but are often shallow | Good — tight ranges, frequent z-score extremes | Lower ATR means smaller absolute P&L per trade |
+| FX (EURUSD, GBPUSD, EURGBP) | Moderate — trends form but are often shallow | Good — tight ranges, frequent z-score extremes | Lower ATR means smaller absolute NetPts per trade |
 | FX (USDJPY) | Good during macro moves | Moderate | More trend-prone than EUR pairs |
-| Indices (US500, DE40, UK100) | Good — strong intraday directional moves | Moderate — can gap through z-score levels | Higher ATR; larger P&L per trade but wider stops needed |
-| Commodities (GOLD, XBRUSD) | Good — GOLD trends strongly; XBRUSD more choppy | Good for XBRUSD | GOLD momentum can produce large wins per trade |
+| Indices (US500, DE40, UK100) | Good — strong intraday directional moves | Moderate — can gap through z-score levels | Higher ATR; larger NetPts per trade but wider stops needed |
+| Commodities (GOLD, XBRUSD) | Good — GOLD trends strongly; XBRUSD more choppy | Good for XBRUSD | GOLD NetPts magnitude is large (price in USD/oz) |
 | Crypto (BTCUSD, ETHUSD) | High volatility — momentum signals frequent but reversals sharp | Poor — z-score extremes are common and reversals can deepen | High stop% likely; treat as exploratory only |
 
-### 8.5 Acting on results
+### 8.6 NetPts scale by instrument
+
+Because P&L is in raw price units, you cannot directly compare NetPts across instruments. Normalise by dividing by the average entry price:
+
+```
+NetPts_normalised = NetPts / avg_entry_price × 100  (gives %)
+```
+
+Example: GOLD at avg_entry 2000 with NetPts=+34.21 → `+1.71%`. EURUSD at avg_entry 1.08 with NetPts=+0.018 → `+1.67%`. These are now comparable.
+
+The `MaxDD%` column already does this normalisation, which is why it is directly comparable across instruments.
+
+### 8.7 Acting on results
 
 The backtest output is a **filter before live tuning**, not a tuning target. Use it to:
 
-1. **Discard clearly unprofitable combinations** — PF < 0.9 with adequate trade count is a hard pass.
-2. **Identify the best 2–3 instrument/strategy pairs** to focus live attention on.
-3. **Detect stop size mismatches** — high Stop% + low PF → `default_pct` is too tight; consider increasing by 0.5%.
+1. **Discard clearly unprofitable combinations** — negative NetPts + PF < 0.9 with adequate trade count is a hard pass.
+2. **Identify the best 2–3 instrument/strategy pairs** — highest PF with NetPts positive and trade count ≥ 30.
+3. **Detect stop size mismatches** — high Stop% + low PF + negative NetPts → `default_pct` is too tight; consider increasing by 0.5%.
 4. **Validate signal frequency** — if `Sig/wk < 1`, the instrument is unlikely to generate live entry opportunities during normal Claude Code sessions.
+5. **Cross-check NetPts with PF** — a PF of 1.4 with only 10 trades and large NetPts is a lucky sample, not an edge. Require both PF > 1.3 and Trades ≥ 30 before trusting the result.
 
 Do not curve-fit the YAML parameters to maximise backtest PF — the dataset is only 3 months of one market regime.
 

@@ -126,6 +126,7 @@ _COLS = [
     ("MaxDD%",      7,  "max_drawdown_pct"),
     ("Stop%",       6,  "stop_out_rate"),
     ("Sig/wk",      7,  "signal_frequency"),
+    ("NetPts",      9,  "net_pnl_pts"),
 ]
 
 
@@ -144,6 +145,8 @@ def _print_table(results: list[BacktestResult]) -> None:
                 cell = f"{val * 100:.1f}%"
             elif attr == "profit_factor":
                 cell = f"{val:.2f}" if val != float("inf") else "inf"
+            elif attr == "net_pnl_pts":
+                cell = f"{val:+.4f}"
             else:
                 cell = str(val)
             row_vals.append(cell.ljust(width))

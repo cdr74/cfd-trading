@@ -44,6 +44,7 @@ class BacktestResult:
     max_drawdown_pct: float
     stop_out_rate: float
     signal_frequency: float     # trades per week
+    net_pnl_pts: float = 0.0   # sum of all pnl_points; sign indicates profit/loss
     trades: list[Trade] = field(default_factory=list)
 
 
@@ -184,6 +185,8 @@ def _summarise(
     else:
         signal_frequency = 0.0
 
+    net_pnl_pts = round(sum(t.pnl_points or 0 for t in trades), 4)
+
     return BacktestResult(
         epic=epic,
         strategy=strategy,
@@ -194,5 +197,6 @@ def _summarise(
         max_drawdown_pct=max_drawdown_pct,
         stop_out_rate=round(len(stopped) / n, 3),
         signal_frequency=signal_frequency,
+        net_pnl_pts=net_pnl_pts,
         trades=trades,
     )

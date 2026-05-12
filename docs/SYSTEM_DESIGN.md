@@ -307,7 +307,7 @@ cfd-trading/
 │       ├── scan_tools.py            # scan_markets, analyze_instrument
 │       └── trade_tools.py           # validate_proposal, execute_trade
 ├── tests/
-│   ├── unit/                        # 192 tests — preflight, monitor, tools, backtest
+│   ├── unit/                        # 195 tests — preflight, monitor, tools, backtest
 │   └── integration/                 # against Capital.com demo API
 ├── integration-test/
 │   ├── mcp-start.sh / mcp-stop.sh

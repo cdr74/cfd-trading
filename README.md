@@ -41,4 +41,4 @@ MCP endpoints: `https://localhost:8089/mcp` (cfd-trading) · `https://localhost:
 
 ## Status
 
-All phases complete. 192 unit tests passing. Both MCP servers running as Podman containers. End-to-end smoke tests (SM-01–SM-11) passed. Backtesting framework operational — `docs/BACKTESTING.md` for how to run.
+All phases complete. 195 unit tests passing. Both MCP servers running as Podman containers. End-to-end smoke tests (SM-01–SM-11) passed. Backtesting framework operational — `docs/BACKTESTING.md` for how to run.
