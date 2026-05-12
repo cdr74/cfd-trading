@@ -164,7 +164,9 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. For example, a bullish EMA crossover in a sequence where the dominant slope is negative returns `None`. This prevents late-entry signals at trend exhaustion.
 
-**Key detail — EMA gap filter:** Even when a crossover occurs, the signal is suppressed if the fractional gap between EMA_9 and EMA_21 is below 0.15% of EMA_21. On M1 bars the two EMAs are nearly identical most of the time; a sub-threshold gap means the "crossover" is noise rather than real momentum divergence. This filter eliminates the majority of false signals at high signal-frequency instruments (crypto, indices).
+**Key detail — EMA gap filter:** Even when a crossover occurs, the signal is suppressed if the fractional gap between EMA_9 and EMA_21 is below the `_MIN_EMA_GAP_PCT` threshold (default **0.02%**). On M1 bars the two EMAs are nearly identical most of the time; a sub-threshold gap means the "crossover" is noise rather than real momentum divergence.
+
+Tuning the threshold (see `backtest/tune_momentum_gap.py`): values below 0.01% flood the engine with noise; values above 0.05% leave too few trades for statistical inference. 0.02% is the empirically optimal value across the 11-instrument watchlist — it yields adequate trade counts (71 trades on GOLD, 201 on XBRUSD) while suppressing the worst noise crossovers. The parameter is configurable per-run via `signal_kwargs={"min_ema_gap_pct": value}` in `run_backtest()`.
 
 **Key detail — slope window:** Slope is computed over a **fixed 22-bar window** (same as the EMA warm-up period), not over unbounded history. A 22-minute slope is the relevant confirmation horizon for an intraday M1 momentum entry; the multi-month slope over the full dataset is not meaningful for this decision.
 
@@ -341,9 +343,9 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 
 `BACKTEST_MODE=true` is set automatically at startup.
 
-### 6.4 Actual baseline results (Jan–May 2026, M1, 1.1M bars)
+### 6.4 Actual baseline results (Jan–May 2026, M1, 1.1M bars, gap=0.02%)
 
-Run time: **~17 seconds** for the full 11-instrument × 2-strategy matrix.
+Run time: **~18 seconds** for the full 11-instrument × 2-strategy matrix (O(n) incremental EMA).
 
 ```
 Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   NetPts
@@ -359,34 +361,56 @@ GOLD      mean_reversion  92      31.5%   0.83    27.635   68.5%   6.21     -843
 XBRUSD    mean_reversion  226     41.6%   1.15    43.015   58.4%   14.54    +37.7810
 BTCUSD    mean_reversion  74      35.1%   1.02    12.649   64.9%   7.33     +1232.2500
 ETHUSD    mean_reversion  116     34.5%   0.99    20.919   65.5%   11.49    -15.7800
-EURUSD    momentum        0       --      --      --       --      --       +0.0000
-GBPUSD    momentum        0       --      --      --       --      --       +0.0000
-USDJPY    momentum        0       --      --      --       --      --       +0.0000
-EURGBP    momentum        0       --      --      --       --      --       +0.0000
-US500     momentum        0       --      --      --       --      --       +0.0000
-DE40      momentum        1       0.0%    0.00    0.611    100.0%  0.07     -139.7000
-UK100     momentum        0       --      --      --       --      --       +0.0000
-GOLD      momentum        0       --      --      --       --      --       +0.0000
-XBRUSD    momentum        3       0.0%    0.00    2.553    100.0%  0.19     -2.3000
-BTCUSD    momentum        0       --      --      --       --      --       +0.0000
-ETHUSD    momentum        1       0.0%    0.00    0.611    100.0%  0.10     -12.7000
+EURUSD    momentum        4       25.0%   1.32    1.145    100.0%  0.29     +0.0043
+GBPUSD    momentum        4       25.0%   0.18    0.798    100.0%  0.29     -0.0107
+USDJPY    momentum        5       20.0%   0.01    1.912    100.0%  0.36     -3.0160
+EURGBP    momentum        1       0.0%    0.00    0.117    0.0%    0.07     -0.0010
+US500     momentum        13      30.8%   0.35    4.686    100.0%  0.90     -222.0000
+DE40      momentum        22      22.7%   0.46    4.616    100.0%  1.52     -846.2000
+UK100     momentum        15      53.3%   3.04    1.896    100.0%  1.04     +612.3000
+GOLD      momentum        71      39.4%   1.52    4.539    95.8%   4.79     +457.2800
+XBRUSD    momentum        201     37.3%   0.97    16.668   98.0%   12.93    -1.8500
+BTCUSD    momentum        76      34.2%   0.60    8.049    100.0%  7.53     -5229.2000
+ETHUSD    momentum        116     35.3%   0.96    8.130    100.0%  11.49    -28.1900
 ```
 
 **Reading these results:**
 
-*Mean reversion:*
-- **DE40** is the standout: PF 1.48, 25 trades, positive net — adequate sample, real edge signal
-- **XBRUSD** 226 trades at PF 1.15 — high frequency, marginal PF, but large sample
-- **BTCUSD** 74 trades at PF 1.02 — essentially flat; not worth trading
-- FX pairs (EURUSD, GBPUSD, EURGBP): 1–3 trades each — sample too small to draw any conclusion
-- **GOLD, US500, UK100**: negative PF — mean reversion does not suit trending/gapping instruments
+*Mean reversion — viable pairs:*
+- **DE40**: PF 1.48, 25 trades — adequate sample with real edge; the standout mean reversion pick
+- **XBRUSD**: PF 1.15, 226 trades — large sample, marginal but consistent edge
+- **BTCUSD**: PF 1.02, 74 trades — essentially breakeven after spread costs; borderline
+- FX pairs: 1–4 trades each, sample too small for any conclusion
+- GOLD, US500, UK100: negative PF — mean reversion does not suit trending/gapping instruments
 
-*Momentum:*
-- 0 trades on 8 of 11 instruments — the 0.15% EMA gap filter is too aggressive for the current dataset
-- The 3 instruments that did fire (DE40, XBRUSD, ETHUSD) all stopped out 100% — the gap filter alone is not sufficient; the strategy needs further work before live use
-- Next tuning lever: lower `_MIN_EMA_GAP_PCT` (e.g. to 0.05–0.10%) or switch to ATR-based gap threshold
+*Momentum — gap filter tuning findings:*
 
-`NetPts` is in raw price units. DE40 is priced in the thousands, so `+2506` represents roughly +0.14% of avg entry. XBRUSD at ~80 USD/bbl, `+37.78` represents ~+0.47% cumulative across 226 trades.
+The optimal gap threshold was found by sweeping 0.0%–1.5% (see `backtest/tune_momentum_gap.py`):
+
+| Gap% | Instruments w/trades | Total trades | Avg sig/wk | Avg stop% | Avg PF |
+|------|---------------------|-------------|-----------|----------|--------|
+| 0.00% | 11 | 3465 | 24.69 | 98.1% | 0.848 |
+| **0.02%** | **11** | **528** | **3.75** | **90.3%** | **0.854** |
+| 0.05% | 9 | 88 | 0.70 | 99.8% | 0.830 |
+| 0.10% | 5 | 25 | 0.34 | 100.0% | 0.697 |
+| 0.20%+ | ≤1 | ≤2 | — | — | — |
+
+**Key finding:** No gap threshold makes momentum universally profitable on M1. The stop rate never drops below 90% regardless of filter strength — the signal enters at the end of micro-moves, not the beginning, so the 2% stop is hit before price reaches the 3% TP. Gap filtering improves signal selectivity but cannot fix a structurally mistimed entry.
+
+*The two exceptions where momentum shows edge:*
+- **GOLD**: PF 1.52, 71 trades, ~5 sig/wk — high ATR means occasional large trending moves overcome the frequent small stop-outs
+- **UK100**: PF 3.04, 15 trades — strong directional intraday sessions; sample borderline for confidence
+
+*Viable instrument/strategy pairs (30+ trades, PF > 1.1):*
+
+| Pair | Trades | PF | Verdict |
+|------|--------|-----|---------|
+| DE40 / mean_reversion | 25 | 1.48 | Borderline sample; best mean reversion |
+| XBRUSD / mean_reversion | 226 | 1.15 | Large sample; deploy with tight risk |
+| GOLD / momentum | 71 | 1.52 | Best momentum; high-ATR only |
+| UK100 / momentum | 15 | 3.04 | Interesting but insufficient sample |
+
+`NetPts` is in raw price units. DE40 is priced ~18000, so `+2506` ≈ +0.14% of avg entry. GOLD at ~2000, `+457` ≈ +0.23% across 71 trades. XBRUSD at ~80, `+37.78` ≈ +0.47% across 226 trades.
 
 ---
 
@@ -579,7 +603,7 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
 | NetPts negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
-| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, currently 0.15%) |
+| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, default 0.02%, tuned range 0.01–0.05%) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |
@@ -590,13 +614,23 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 
 Based on the current 3-month M1 dataset:
 
-| Instrument class | Momentum suitability | Mean reversion suitability | Notes |
-|-----------------|---------------------|--------------------------|-------|
-| FX (EURUSD, GBPUSD, EURGBP) | Moderate — trends form but are often shallow | Good — tight ranges, frequent z-score extremes | Lower ATR means smaller absolute NetPts per trade |
-| FX (USDJPY) | Good during macro moves | Moderate | More trend-prone than EUR pairs |
-| Indices (US500, DE40, UK100) | Good — strong intraday directional moves | Moderate — can gap through z-score levels | Higher ATR; larger NetPts per trade but wider stops needed |
-| Commodities (GOLD, XBRUSD) | Good — GOLD trends strongly; XBRUSD more choppy | Good for XBRUSD | GOLD NetPts magnitude is large (price in USD/oz) |
-| Crypto (BTCUSD, ETHUSD) | High volatility — momentum signals frequent but reversals sharp | Poor — z-score extremes are common and reversals can deepen | High stop% likely; treat as exploratory only |
+Empirically derived from baseline backtest (Jan–May 2026, M1):
+
+| Instrument | Momentum (PF / trades) | Mean Rev (PF / trades) | Verdict |
+|------------|----------------------|----------------------|---------|
+| EURUSD | 1.32 / 4 | 0.76 / 3 | Both: sample too small |
+| GBPUSD | 0.18 / 4 | 0.00 / 2 | Skip |
+| USDJPY | 0.01 / 5 | 1.45 / 4 | Both: sample too small |
+| EURGBP | 0.00 / 1 | 0.00 / 1 | Skip |
+| US500 | 0.35 / 13 | 0.50 / 16 | Skip — both negative |
+| DE40 | 0.46 / 22 | **1.48 / 25** | Mean rev viable; momentum no |
+| UK100 | **3.04 / 15** | 0.69 / 17 | Momentum promising (small sample) |
+| GOLD | **1.52 / 71** | 0.83 / 92 | Momentum viable; mean rev no |
+| XBRUSD | 0.97 / 201 | **1.15 / 226** | Mean rev marginal; momentum breakeven |
+| BTCUSD | 0.60 / 76 | 1.02 / 74 | Both poor; crypto too choppy |
+| ETHUSD | 0.96 / 116 | 0.99 / 116 | Both breakeven; skip |
+
+**Pattern:** Mean reversion works on range-bound instruments with moderate ATR (DE40, XBRUSD). Momentum works only on high-ATR instruments where large directional moves occur (GOLD, UK100). FX pairs generate too few signals at M1 for either strategy to be meaningful on a 3-month dataset.
 
 ### 8.6 NetPts scale by instrument
 

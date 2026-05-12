@@ -54,17 +54,20 @@ def run_backtest(
     bars: list[OHLCBar],
     strategy_config: dict,
     risk_config: dict,
+    signal_kwargs: dict | None = None,
 ) -> BacktestResult:
     """Walk bars chronologically; fire entry signals; manage exits with evaluate_position.
 
     strategy_config — loaded strategy YAML dict (e.g. momentum.yaml)
     risk_config     — global section of risk.yaml (unused by evaluate_position directly,
                       kept for future preflight integration)
+    signal_kwargs   — optional keyword args forwarded to the signal state constructor
+                      (e.g. {"min_ema_gap_pct": 0.002} for tuning the momentum filter)
     """
     if strategy not in _SIGNAL_STATES:
         raise ValueError(f"Unknown strategy '{strategy}'. Available: {list(_SIGNAL_STATES)}")
 
-    signal_state = _SIGNAL_STATES[strategy]()
+    signal_state = _SIGNAL_STATES[strategy](**(signal_kwargs or {}))
     stop_pct = strategy_config["risk"]["stop_loss"]["default_pct"] / 100
     rr_ratio = strategy_config["risk"]["take_profit"]["min_rr_ratio"]
 

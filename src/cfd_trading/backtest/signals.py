@@ -17,7 +17,10 @@ from cfd_trading.storage.repository import OHLCBar
 
 # Minimum fractional gap between EMA9 and EMA21 at the moment of crossover.
 # Filters noise crossovers where the two EMAs are nearly identical on M1 bars.
-_MIN_EMA_GAP_PCT = 0.0015   # 0.15%
+# Tuned empirically: 0.02% gives the best trade count / signal quality balance
+# across the 11-instrument watchlist.  Higher values (>0.05%) leave too few trades
+# to be statistically meaningful; lower values (<0.01%) flood with noise signals.
+_MIN_EMA_GAP_PCT = 0.0002   # 0.02%
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +40,8 @@ class MomentumSignalState:
     _MIN_BARS    = 22   # EMA21 seeds at bar 21; crossover needs one prior bar
     _SLOPE_WINDOW = 22  # cap slope window to same length
 
-    def __init__(self) -> None:
+    def __init__(self, min_ema_gap_pct: float = _MIN_EMA_GAP_PCT) -> None:
+        self._min_ema_gap_pct = min_ema_gap_pct
         self._n: int = 0
         self._ema9:  float | None = None
         self._ema21: float | None = None
@@ -80,7 +84,7 @@ class MomentumSignalState:
 
         # Gap filter — suppress near-identical EMA crossovers
         gap_pct = abs(self._ema9 - self._ema21) / self._ema21
-        if gap_pct < _MIN_EMA_GAP_PCT:
+        if gap_pct < self._min_ema_gap_pct:
             return None
 
         slope = _trend_slope(list(self._slope_buf))
