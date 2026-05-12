@@ -24,10 +24,6 @@ For each instrument, assess:
 - Does client sentiment lean in the direction of the potential trade?
 - Contrarian signal: if >75% of clients are long and you are considering a LONG, note this as a warning.
 
-**5. Session alignment**
-- Is this instrument active in the current trading session (London / New York / Asia)?
-- Low-volume instruments outside their primary session have unreliable data.
-
 ---
 
 ## Output Format

@@ -33,6 +33,7 @@ def _minimal_yaml(overrides: dict | None = None) -> dict:
         "description": "Test strategy",
         "entry": {"min_size": 0.1, "max_size": 5.0},
         "risk": {
+            "target_risk_pct": 1.0,
             "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
             "trailing_stop": {"enabled": False},
             "take_profit": {"dynamic": False, "min_rr_ratio": 1.5, "max_pct": 10.0},

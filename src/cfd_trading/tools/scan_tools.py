@@ -24,7 +24,6 @@ def scan_markets(watchlist: str | None = None) -> str:
 
     epics = _resolve_watchlist(watchlist, state.config_dir)
     scan_prompt = load_scan_prompt(state.config_dir)
-    session_label = _current_session_label()
 
     instruments = []
     for epic in epics:
@@ -34,7 +33,6 @@ def scan_markets(watchlist: str | None = None) -> str:
 
     return json.dumps({
         "scan_prompt": scan_prompt,
-        "session": session_label,
         "instruments": instruments,
     })
 
@@ -71,6 +69,17 @@ def analyze_instrument(epic: str, strategy: str) -> str:
     spread, spread_pct = _compute_spread(bars, atr)
     candle_summary = _summarise_candles(bars, n=20)
     high_low = _recent_high_low(bars)
+    ema_9 = _compute_ema(bars, 9)
+    ema_21 = _compute_ema(bars, 21)
+    zscore = _compute_zscore(bars)
+
+    account_info = state.client.get_account_info()
+    accounts = account_info.get("accounts", []) if "error" not in account_info else []
+    account_balance = accounts[0]["balance"]["available"] if accounts else None
+    target_risk_pct = strat.config.get("risk", {}).get("target_risk_pct")
+    suggested_size = None
+    if account_balance and atr and atr > 0 and target_risk_pct:
+        suggested_size = round((target_risk_pct / 100) * account_balance / atr, 2)
 
     return json.dumps({
         "base_prompt": base_prompt,
@@ -89,6 +98,13 @@ def analyze_instrument(epic: str, strategy: str) -> str:
             "recent_high": high_low["high"],
             "recent_low": high_low["low"],
             "bars_available": len(bars),
+            "ema_9": ema_9,
+            "ema_21": ema_21,
+            "zscore": zscore,
+        },
+        "account": {
+            "available_balance": account_balance,
+            "suggested_size": suggested_size,
         },
         "candles": candle_summary,
         "sentiment": {
@@ -232,6 +248,48 @@ def _analyse_epic(client, epic: str) -> dict | None:
     }
 
 
+def _compute_ema(bars: list, period: int) -> float | None:
+    """Exponential moving average of close (bid) seeded with a simple average."""
+    closes = []
+    for b in bars:
+        try:
+            closes.append(b["closePrice"]["bid"])
+        except (KeyError, TypeError):
+            continue
+    if len(closes) < period:
+        return None
+    alpha = 2.0 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for c in closes[period:]:
+        ema = alpha * c + (1 - alpha) * ema
+    return round(ema, 6)
+
+
+def _compute_zscore(bars: list, period: int = 20) -> dict:
+    """
+    Z-score of the latest close relative to the last `period` closes.
+    Returns {"mu", "sigma", "z"} — all None if there is insufficient data.
+    """
+    closes = []
+    for b in bars:
+        try:
+            closes.append(b["closePrice"]["bid"])
+        except (KeyError, TypeError):
+            continue
+    window = closes[-period:] if len(closes) >= period else closes
+    if len(window) < 4:
+        return {"mu": None, "sigma": None, "z": None}
+    mu = sum(window) / len(window)
+    sigma = (sum((c - mu) ** 2 for c in window) / len(window)) ** 0.5
+    if sigma == 0:
+        return {"mu": round(mu, 6), "sigma": 0.0, "z": None}
+    return {
+        "mu": round(mu, 6),
+        "sigma": round(sigma, 6),
+        "z": round((window[-1] - mu) / sigma, 3),
+    }
+
+
 def _resolve_watchlist(watchlist_param: str | None, config_dir: Path) -> list[str]:
     if watchlist_param:
         return [e.strip() for e in watchlist_param.split(",") if e.strip()]
@@ -243,14 +301,3 @@ def _resolve_watchlist(watchlist_param: str | None, config_dir: Path) -> list[st
         if isinstance(group, list):
             epics.extend(group)
     return epics
-
-
-def _current_session_label() -> str:
-    """Return the active trading session name based on UTC hour."""
-    from datetime import datetime, timezone
-    hour = datetime.now(timezone.utc).hour
-    if 7 <= hour < 16:
-        return "London"
-    if 13 <= hour < 22:
-        return "New York"
-    return "Asia"

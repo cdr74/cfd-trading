@@ -16,6 +16,8 @@ from cfd_trading.tools.scan_tools import (
     _compute_atr,
     _compute_trend_slope,
     _compute_spread,
+    _compute_ema,
+    _compute_zscore,
     _summarise_candles,
     scan_markets,
     analyze_instrument,
@@ -134,6 +136,45 @@ def test_summarise_candles_returns_last_n():
     assert len(summary) == 10
     assert "close_bid" in summary[0]
     assert "time" in summary[0]
+
+
+def test_compute_ema_returns_float_for_sufficient_bars():
+    bars = _mock_bars(30)
+    ema = _compute_ema(bars, 9)
+    assert ema is not None
+    assert ema > 0
+
+
+def test_compute_ema_returns_none_for_insufficient_bars():
+    bars = _mock_bars(5)
+    assert _compute_ema(bars, 9) is None
+
+
+def test_compute_ema_9_above_21_in_uptrend():
+    bars = _mock_bars(30, base=1.0800, step=0.0005)
+    ema9 = _compute_ema(bars, 9)
+    ema21 = _compute_ema(bars, 21)
+    assert ema9 is not None and ema21 is not None
+    assert ema9 > ema21
+
+
+def test_compute_zscore_returns_dict_with_expected_keys():
+    bars = _mock_bars(30)
+    result = _compute_zscore(bars)
+    assert "mu" in result and "sigma" in result and "z" in result
+
+
+def test_compute_zscore_uptrend_positive_z():
+    bars = _mock_bars(30, base=1.0800, step=0.0005)
+    result = _compute_zscore(bars)
+    assert result["z"] is not None
+    assert result["z"] > 0
+
+
+def test_compute_zscore_insufficient_bars_returns_none_values():
+    bars = _mock_bars(2)
+    result = _compute_zscore(bars)
+    assert result["z"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +348,23 @@ def test_analyze_instrument_returns_expected_keys(active_state):
     assert "strategy_config" in result
     assert "candles" in result
     assert "analysis" in result
+    assert "account" in result
     assert len(result["candles"]) <= 20
+    analysis = result["analysis"]
+    assert "ema_9" in analysis
+    assert "ema_21" in analysis
+    assert "zscore" in analysis
+    assert analysis["ema_9"] is not None
+    assert analysis["ema_21"] is not None
+
+
+def test_analyze_instrument_account_sizing(active_state):
+    active_state.client.get_prices.return_value = {"prices": _mock_bars(60)}
+    result = json.loads(analyze_instrument("EURUSD", "momentum"))
+    account = result["account"]
+    assert account["available_balance"] == 8000.0
+    assert account["suggested_size"] is not None
+    assert account["suggested_size"] > 0
 
 
 def test_analyze_instrument_includes_sentiment(active_state):
@@ -356,3 +413,37 @@ def test_get_session_status_requires_active_session():
     _state_mod.clear_state()
     with pytest.raises(RuntimeError, match="No active session"):
         get_session_status()
+
+
+# ---------------------------------------------------------------------------
+# Backtest mode guard
+# ---------------------------------------------------------------------------
+
+def test_capital_client_raises_in_backtest_mode(monkeypatch):
+    monkeypatch.setenv("BACKTEST_MODE", "true")
+    from cfd_trading.broker import capital_client as cc_mod
+    with pytest.raises(RuntimeError, match="Live API disabled in backtest mode"):
+        cc_mod.CapitalClient()
+
+
+def test_capital_client_raises_in_backtest_mode_case_insensitive(monkeypatch):
+    monkeypatch.setenv("BACKTEST_MODE", "TRUE")
+    from cfd_trading.broker import capital_client as cc_mod
+    with pytest.raises(RuntimeError, match="Live API disabled in backtest mode"):
+        cc_mod.CapitalClient()
+
+
+def test_capital_client_does_not_raise_when_backtest_mode_unset(monkeypatch):
+    monkeypatch.delenv("BACKTEST_MODE", raising=False)
+    from cfd_trading.broker import capital_client as cc_mod
+    with patch("capital_com_client.CapitalClient.__init__", return_value=None):
+        client = cc_mod.CapitalClient()
+    assert client is not None
+
+
+def test_capital_client_does_not_raise_when_backtest_mode_false(monkeypatch):
+    monkeypatch.setenv("BACKTEST_MODE", "false")
+    from cfd_trading.broker import capital_client as cc_mod
+    with patch("capital_com_client.CapitalClient.__init__", return_value=None):
+        client = cc_mod.CapitalClient()
+    assert client is not None

@@ -1,0 +1,249 @@
+"""Unit tests for backtest/engine.py — no I/O, synthetic bar sequences."""
+
+import pytest
+from cfd_trading.storage.repository import OHLCBar
+from cfd_trading.backtest.engine import run_backtest, Trade, BacktestResult
+
+
+# ---------------------------------------------------------------------------
+# Fixtures — strategy configs matching the real YAML files
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def momentum_cfg():
+    return {
+        "risk": {
+            "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
+            "trailing_stop": {
+                "enabled": True,
+                "min_distance_pct": 0.5,
+                "max_distance_pct": 3.0,
+            },
+            "take_profit": {"dynamic": True, "min_rr_ratio": 1.5},
+            "time_exit": {"enabled": False},
+        }
+    }
+
+
+@pytest.fixture
+def mean_rev_cfg():
+    return {
+        "risk": {
+            "stop_loss": {"type": "HARD", "default_pct": 1.5, "max_pct": 3.0},
+            "trailing_stop": {"enabled": False},
+            "take_profit": {"dynamic": False, "min_rr_ratio": 2.0},
+            "time_exit": {"enabled": False},
+        }
+    }
+
+
+RISK_CFG = {"global": {"max_loss_pct_per_trade": 5.0, "margin_floor_pct": 20.0}}
+
+
+# ---------------------------------------------------------------------------
+# Bar-building helpers
+# ---------------------------------------------------------------------------
+
+def _bar(ts: int, price: float, open_price: float | None = None) -> OHLCBar:
+    o = open_price if open_price is not None else price
+    return OHLCBar(epic="EURUSD", resolution="M1", ts=ts,
+                   open=o, high=price, low=price, close=price, volume=100)
+
+
+def _bars(prices: list[float]) -> list[OHLCBar]:
+    """All OHLC fields equal to close price. ts = index * 60."""
+    return [_bar(i * 60, p) for i, p in enumerate(prices)]
+
+
+def _momentum_long_entry_bars(entry_open: float = 1.10) -> list[OHLCBar]:
+    """21 flat bars + 1 spike → signal fires; next bar is the entry bar."""
+    flat = [1.0] * 21
+    spike = [1.10]
+    entry = [entry_open]
+    return _bars(flat + spike) + [_bar((len(flat) + len(spike)) * 60, entry_open, entry_open)]
+
+
+# ---------------------------------------------------------------------------
+# Entry signal tests
+# ---------------------------------------------------------------------------
+
+class TestEntry:
+
+    def test_momentum_long_opens_trade(self, momentum_cfg):
+        bars = _momentum_long_entry_bars()
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades >= 1
+        assert result.trades[0].direction == "BUY"
+        assert result.trades[0].entry_price == 1.10
+
+    def test_momentum_short_opens_trade(self, momentum_cfg):
+        # 21 flat bars + spike down → SHORT signal
+        bars = _bars([1.0] * 21 + [0.90, 0.90])
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades >= 1
+        assert result.trades[0].direction == "SELL"
+
+    def test_mean_reversion_long_opens_trade(self, mean_rev_cfg):
+        # 19 bars at 1.0, then spike down → LONG mean reversion
+        bars = _bars([1.0] * 19 + [0.5, 0.5])
+        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
+        assert result.total_trades >= 1
+        assert result.trades[0].direction == "BUY"
+
+    def test_mean_reversion_short_opens_trade(self, mean_rev_cfg):
+        # 19 bars at 1.0, then spike up → SHORT mean reversion
+        bars = _bars([1.0] * 19 + [1.5, 1.5])
+        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
+        assert result.total_trades >= 1
+        assert result.trades[0].direction == "SELL"
+
+    def test_no_signal_produces_no_trades(self, momentum_cfg):
+        # Flat bars — no crossover, no signal
+        result = run_backtest("EURUSD", "momentum", _bars([1.0] * 30), momentum_cfg, RISK_CFG)
+        assert result.total_trades == 0
+
+    def test_stop_and_take_profit_set_correctly(self, momentum_cfg):
+        # Entry at 1.10, default_pct=2.0, rr=1.5
+        # stop = 1.10 * 0.98 = 1.078
+        # take_profit = 1.10 + (1.10 * 0.02 * 1.5) = 1.10 + 0.033 = 1.133
+        bars = _momentum_long_entry_bars(entry_open=1.10)
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        trade = result.trades[0]
+        assert trade.stop_loss == pytest.approx(1.10 * 0.98, rel=1e-4)
+        assert trade.take_profit == pytest.approx(1.10 + 1.10 * 0.02 * 1.5, rel=1e-4)
+
+    def test_unknown_strategy_raises(self, momentum_cfg):
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            run_backtest("EURUSD", "ghost", _bars([1.0] * 30), momentum_cfg, RISK_CFG)
+
+
+# ---------------------------------------------------------------------------
+# Exit rule tests
+# ---------------------------------------------------------------------------
+
+class TestExits:
+
+    def test_hard_stop_closes_trade(self, momentum_cfg):
+        # Entry at 1.10, stop ≈ 1.078; bar after entry crashes to 0.50
+        signal_bars = _bars([1.0] * 21 + [1.10])     # signal fires here
+        entry_bar = _bar(22 * 60, 1.10)              # entry at 1.10 open
+        crash_bar = _bar(23 * 60, 0.50)              # price below stop
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        assert "Hard stop" in trade.exit_reason
+        assert trade.pnl_points < 0
+
+    def test_take_profit_closes_trade(self):
+        # Trailing stop must be disabled so the take-profit check is reached.
+        # With trailing stop enabled, evaluate_position returns ADJUST (ratchet)
+        # before it reaches the take-profit check, masking the TP exit.
+        cfg_no_ts = {
+            "risk": {
+                "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
+                "trailing_stop": {"enabled": False},
+                "take_profit": {"dynamic": True, "min_rr_ratio": 1.5},
+                "time_exit": {"enabled": False},
+            }
+        }
+        # Entry at 1.10; TP = 1.10 + 1.10*0.02*1.5 = 1.133; 2.0 > 1.133 → CLOSE
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        tp_bar = _bar(23 * 60, 2.0)
+        bars = signal_bars + [entry_bar, tp_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, cfg_no_ts, RISK_CFG)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        assert "Take profit" in trade.exit_reason
+        assert trade.pnl_points > 0
+
+    def test_trailing_stop_ratchets_upward(self, momentum_cfg):
+        # Enter BUY at 1.10. Price rises to 2.0 → ratchet should ADJUST stop upward.
+        # Then price crashes → closed at the ratcheted stop level.
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        # min_distance_pct=0.5; candidate = 2.0 * 0.995 = 1.99 > initial stop 1.078 → ADJUST
+        high_bar = _bar(23 * 60, 2.0)
+        # Now stop is ~1.99; crash to 1.50 → below 1.99 → hard stop fires
+        crash_bar = _bar(24 * 60, 1.50)
+        bars = signal_bars + [entry_bar, high_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        # Stop was ratcheted up, so the closing price reflects that
+        assert "Hard stop" in trade.exit_reason
+        # P&L should be profitable because ratcheted stop is above entry
+        assert trade.pnl_points > 0
+
+    def test_end_of_data_closes_open_trade(self, momentum_cfg):
+        # Signal fires but no more bars to trigger a rule exit → closed at last bar
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        flat_bars = [_bar((23 + i) * 60, 1.10) for i in range(3)]
+        bars = signal_bars + [entry_bar] + flat_bars
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert result.trades[0].exit_reason == "End of data"
+
+
+# ---------------------------------------------------------------------------
+# BacktestResult metrics
+# ---------------------------------------------------------------------------
+
+class TestMetrics:
+
+    def _result_with_trades(self, trades_pnl: list[float], strategy_cfg, exit_reasons=None):
+        """Build a BacktestResult by running a sequence that produces known trades."""
+        # We test _summarise indirectly by constructing a scenario where trades
+        # are deterministic enough to predict the outcome metrics.
+        # For metric accuracy, we use the real engine with a crafted bar sequence
+        # that produces one predictable trade per run.
+        pass  # see individual tests below
+
+    def test_win_rate_computed_correctly(self, momentum_cfg):
+        # One winning trade (TP hit)
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        tp_bar = _bar(23 * 60, 2.0)
+        bars = signal_bars + [entry_bar, tp_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert result.winning_trades == 1
+        assert result.win_rate == 1.0
+
+    def test_stop_out_rate_computed_correctly(self, momentum_cfg):
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        crash_bar = _bar(23 * 60, 0.50)
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.stop_out_rate == 1.0
+
+    def test_profit_factor_with_winning_trade(self, momentum_cfg):
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        tp_bar = _bar(23 * 60, 2.0)
+        bars = signal_bars + [entry_bar, tp_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        # No losing trades → profit_factor = inf
+        assert result.profit_factor == float("inf")
+
+    def test_empty_bars_returns_zero_trades(self, momentum_cfg):
+        result = run_backtest("EURUSD", "momentum", [], momentum_cfg, RISK_CFG)
+        assert result.total_trades == 0
+        assert result.win_rate == 0.0
+        assert result.profit_factor == 0.0
+
+    def test_result_fields_populated(self, momentum_cfg):
+        result = run_backtest("EURUSD", "momentum", _bars([1.0] * 5), momentum_cfg, RISK_CFG)
+        assert result.epic == "EURUSD"
+        assert result.strategy == "momentum"
+        assert isinstance(result.trades, list)

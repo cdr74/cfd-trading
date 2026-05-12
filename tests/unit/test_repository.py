@@ -169,3 +169,98 @@ def test_session_summary_empty_session(conn):
     summary = repo.get_session_summary(conn, session_id)
     assert summary.total_trades == 0
     assert summary.executed_trades == 0
+
+
+# ---------------------------------------------------------------------------
+# OHLC bars
+# ---------------------------------------------------------------------------
+
+def _insert_bars(conn, rows):
+    conn.executemany(
+        "INSERT INTO ohlc_bars (epic, resolution, ts, open, high, low, close, volume) VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+
+
+def test_get_bars_returns_chronological_order(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 3000, 1.10, 1.11, 1.09, 1.105, 100),
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("EURUSD", "M1", 2000, 1.09, 1.10, 1.08, 1.095, 90),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1")
+    assert [b.ts for b in bars] == [1000, 2000, 3000]
+
+
+def test_get_bars_from_ts_filter(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("EURUSD", "M1", 2000, 1.09, 1.10, 1.08, 1.095, 90),
+        ("EURUSD", "M1", 3000, 1.10, 1.11, 1.09, 1.105, 100),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1", from_ts=2000)
+    assert len(bars) == 2
+    assert bars[0].ts == 2000
+
+
+def test_get_bars_to_ts_filter(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("EURUSD", "M1", 2000, 1.09, 1.10, 1.08, 1.095, 90),
+        ("EURUSD", "M1", 3000, 1.10, 1.11, 1.09, 1.105, 100),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1", to_ts=2000)
+    assert len(bars) == 2
+    assert bars[-1].ts == 2000
+
+
+def test_get_bars_range_filter(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("EURUSD", "M1", 2000, 1.09, 1.10, 1.08, 1.095, 90),
+        ("EURUSD", "M1", 3000, 1.10, 1.11, 1.09, 1.105, 100),
+        ("EURUSD", "M1", 4000, 1.11, 1.12, 1.10, 1.115, 110),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1", from_ts=2000, to_ts=3000)
+    assert len(bars) == 2
+    assert bars[0].ts == 2000
+    assert bars[1].ts == 3000
+
+
+def test_get_bars_isolates_by_epic(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("GBPUSD", "M1", 1000, 1.25, 1.26, 1.24, 1.255, 70),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1")
+    assert len(bars) == 1
+    assert bars[0].epic == "EURUSD"
+
+
+def test_get_bars_isolates_by_resolution(conn):
+    _insert_bars(conn, [
+        ("EURUSD", "M1", 1000, 1.08, 1.09, 1.07, 1.085, 80),
+        ("EURUSD", "H1", 1000, 1.08, 1.09, 1.07, 1.085, 480),
+    ])
+    bars = repo.get_bars(conn, "EURUSD", "M1")
+    assert len(bars) == 1
+    assert bars[0].resolution == "M1"
+
+
+def test_get_bars_empty_result(conn):
+    bars = repo.get_bars(conn, "EURUSD", "M1")
+    assert bars == []
+
+
+def test_get_bars_returns_ohlcbar_dataclass(conn):
+    _insert_bars(conn, [("GOLD", "M1", 5000, 2300.0, 2310.0, 2290.0, 2305.0, 50)])
+    bars = repo.get_bars(conn, "GOLD", "M1")
+    b = bars[0]
+    assert isinstance(b, repo.OHLCBar)
+    assert b.epic == "GOLD"
+    assert b.open == 2300.0
+    assert b.high == 2310.0
+    assert b.low == 2290.0
+    assert b.close == 2305.0
+    assert b.volume == 50

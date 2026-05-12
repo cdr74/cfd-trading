@@ -30,6 +30,18 @@ def _default_db_path() -> str:
 
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS ohlc_bars (
+    epic        TEXT    NOT NULL,
+    resolution  TEXT    NOT NULL,
+    ts          INTEGER NOT NULL,
+    open        REAL    NOT NULL,
+    high        REAL    NOT NULL,
+    low         REAL    NOT NULL,
+    close       REAL    NOT NULL,
+    volume      INTEGER NOT NULL,
+    PRIMARY KEY (epic, resolution, ts)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     started_at  TEXT NOT NULL,

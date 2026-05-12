@@ -8,6 +8,7 @@
 
 Apply momentum when:
 - A clear directional trend is visible on the 1-min chart over at least 15–20 bars
+- EMA_9 has crossed above (LONG) or below (SHORT) EMA_21 and the gap is widening
 - ATR is expanding (volatility increasing into the move, not decreasing)
 - The breakout is accompanied by a sentiment lean in the trade direction (not contrarian)
 - Spread/ATR ratio is below 20% — momentum trades need room to run
@@ -55,6 +56,7 @@ Do not apply momentum when:
 
 In your `signal_basis`, describe:
 - What confirms the trend (e.g. slope of last N bars, ATR expansion, higher highs)
+- Whether EMA_9 is above or below EMA_21 and whether the gap is widening or narrowing
 - Where the breakout level is and whether price has cleared it convincingly
 
 In your `contra_indicators`, address:

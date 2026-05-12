@@ -7,7 +7,7 @@
 ## When to Apply This Strategy
 
 Apply mean reversion when:
-- Price has moved sharply away from its recent average (last 20–30 bars) and shows signs of stalling or reversing
+- Price has moved sharply away from its recent average — use |z_score| ≥ 2.0 as the quantitative threshold for "overextended"; treat |z_score| ≥ 2.5 as a stronger signal
 - ATR is normal or contracting — the move is losing momentum
 - Sentiment is heavily skewed in the direction of the move (>65% of clients positioned with the trend) — this is a contrarian signal in your favour
 - The instrument is ranging overall with identifiable support and resistance levels
@@ -52,9 +52,10 @@ Trailing stop is disabled for mean reversion. The trade has a fixed target and a
 ## Reasoning Guidance
 
 In your `signal_basis`, describe:
-- How far price has moved from its recent mean and over how many bars
+- The z_score value and what it tells you about the degree of overextension
+- How far price has moved from its recent mean (mu) and over how many bars
 - What reversal signal, if any, is visible (stall, wick, sentiment extreme)
-- Where the natural mean or target level sits
+- Where the natural mean (mu) or target level sits
 
 In your `contra_indicators`, address:
 - Could this be the start of a genuine trend rather than an overextension?

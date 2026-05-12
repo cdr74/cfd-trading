@@ -184,7 +184,85 @@ Both MCP servers run as Podman containers serving streamable-HTTP over HTTPS, wi
 - [x] TLS certs generated with mkcert in `trading/certs/`; mkcert root CA imported into Windows Trusted Root store for Claude Desktop trust
 - [x] Both containers verified running and responding on `https://.../mcp`
 - [x] `mcp-start.sh` pulls pre-built images from ghcr.io; `publish.yml` builds and pushes on every push to main
-- [ ] Run full end-to-end smoke tests — see `SMOKE_TESTS.md` in workspace root (SM-01 through SM-11)
+- [x] Run full end-to-end smoke tests — SM-01 through SM-11 all passed
+
+---
+
+## Phase 9 — Scan / Analysis Improvements ✓
+
+- [x] Remove session labeling from `scan_markets` — `spread_pct_of_atr` is the real liquidity signal; Capital.com CFDs trade 24/7 so session-based deprioritisation was misleading
+  - [x] Removed `_current_session_label()` from `scan_tools.py`
+  - [x] Removed `"session"` key from `scan_markets` response JSON
+  - [x] Removed "Session alignment" criterion from `config/strategies/scan.md`
+- [x] Add computed indicators to `analyze_instrument` response
+  - [x] `EMA_9`, `EMA_21` — from 60 × 1-min bars (bid close)
+  - [x] `zscore` — z-score of latest close relative to 20-bar window (mu, sigma, z)
+  - [x] `momentum.md` updated to reference EMA_9/21 cross in entry logic and signal_basis
+  - [x] `mean_reversion.md` updated to reference z-score threshold (|z| ≥ 2.0) in entry logic and signal_basis
+- [x] Vol-scaled position sizing in `analyze_instrument`
+  - [x] `target_risk_pct` added to `momentum.yaml` (1.0%) and `mean_reversion.yaml` (0.5%)
+  - [x] `target_risk_pct` added to strategy loader required fields
+  - [x] `analyze_instrument` fetches account balance and computes `suggested_size = target_risk_pct/100 × balance / ATR`
+  - [x] Result exposed as `"account": {"available_balance": ..., "suggested_size": ...}` in response
+- [x] Unit tests — 136 passing (7 new tests covering EMA, z-score, and account sizing)
+
+---
+
+## Phase 10 — Backtesting Framework
+
+See `docs/SYSTEM_DESIGN.md` §3.10 and `docs/BACKTESTING.md` for full design decisions, rationale, and MT5 constraints. Do not re-derive these — they were established through empirical testing.
+
+### 10.1 Data layer — Windows-side fetch script
+
+- [x] `backtest/fetch_ohlc.py` (Windows Python, not WSL2)
+  - [x] Symbol map: `GOLD→XAUUSD`, `XBRUSD→BRENTOIL`, all others match watchlist epics exactly
+  - [x] Bulk fetch: **4×30-day** `copy_rates_range` calls per instrument — MT5 caps at ~100k rows/call; 30-day windows (≤43,200 rows) stay safely under the cap. 60-day windows fail for dense instruments (DE40, GOLD).
+  - [x] Writes to `C:\Users\chris\dev\trading-data\trading.db` — accessible from WSL2 at `/mnt/c/Users/chris/dev/trading-data/trading.db`
+  - [x] SQLite table: `ohlc_bars (epic TEXT, resolution TEXT, ts INTEGER, open REAL, high REAL, low REAL, close REAL, volume INTEGER, PRIMARY KEY (epic, resolution, ts))`
+  - [x] Epic column stores watchlist name (e.g. `GOLD`), not MT5 symbol — translate at write time
+  - [x] Upsert on conflict (ignore duplicates from overlapping windows)
+  - [x] Daily incremental fetch: one call per instrument covering yesterday → today
+  - [x] Run: 1.1M bars loaded across 11 instruments (2026-05-11)
+
+### 10.2 Data layer — WSL2-side schema integration
+
+- [x] Add `ohlc_bars` table to `storage/db.py` `init_db()` — idempotent, same SQLite file
+- [x] Add `get_bars(epic, resolution, from_ts, to_ts)` to `storage/repository.py`
+- [x] Unit tests for `get_bars`
+
+### 10.3 Backtest mode flag
+
+- [x] `BACKTEST_MODE=true` env var — when set, any call path that would invoke `CapitalClient` raises `RuntimeError("Live API disabled in backtest mode")` immediately
+- [x] Add guard to `tools/_state.py` or broker wrapper — enforced at the client call level, not per-tool
+
+### 10.4 Rule-based entry signals
+
+- [x] `backtest/signals.py`
+  - [x] `momentum_signal(bars) -> "LONG" | "SHORT" | None` — EMA_9 crosses above/below EMA_21 in last bar; confirm trend_slope direction
+  - [x] `mean_reversion_signal(bars) -> "LONG" | "SHORT" | None` — `|z_score| >= 2.0`; direction opposite to z_score sign
+  - [x] Reuse `_compute_ema`, `_compute_zscore`, `_compute_atr` from `scan_tools.py` (already extracted as pure functions)
+  - [x] Unit tests for both signals — uptrend bars produce LONG momentum signal; z>2 produces SHORT mean-reversion signal
+
+### 10.5 Backtest engine
+
+- [x] `backtest/engine.py`
+  - [x] `run_backtest(epic, strategy, bars, strategy_config, risk_config) -> BacktestResult`
+  - [x] Walk bars chronologically; at each bar compute indicators and check entry signal
+  - [x] On signal: simulate MARKET entry at next bar open; run preflight; record position
+  - [x] Per-bar position management: call `evaluate_position()` from `monitor/monitor.py` — same rule engine as live
+  - [x] Track: entry price, stop_loss, take_profit, exit price, exit reason, P&L
+  - [x] `BacktestResult` dataclass: trades list, win_rate, profit_factor, max_drawdown_pct, stop_out_rate, signal_frequency
+  - [x] Unit tests with synthetic bar sequences covering: momentum entry → trailing stop exit; mean reversion entry → take profit exit; hard stop triggered
+
+### 10.6 Backtest runner / reporting
+
+- [x] `backtest/run.py` — CLI entry point: `python -m cfd_trading.backtest.run --strategy momentum --epic EURUSD`
+  - [x] `--epic EPIC` / `--all-epics`; `--strategy NAME` / `--all-strategies`; `--resolution` (default M1)
+  - [x] Reads bars from `BACKTEST_DB_PATH` (default `/mnt/c/Users/chris/dev/trading-data/trading.db`)
+  - [x] Loads strategy config from `CONFIG_DIR/strategies/` and risk from `CONFIG_DIR/risk.yaml`
+  - [x] Prints summary table: total_trades, win_rate, profit_factor, max_drawdown_pct, stop_out_rate, signal_frequency
+  - [x] Sets `BACKTEST_MODE=true` at startup — no Capital.com or Anthropic API calls possible
+  - [x] Unit tests — `tests/unit/test_run.py` — 11 tests; **190 unit tests passing** (up from 179)
 
 ---
 
@@ -201,7 +279,7 @@ Both MCP servers run as Podman containers serving streamable-HTTP over HTTPS, wi
 
 ### Broker / Instrument Generalization Refactor
 
-See README §4.8 for the full analysis. The logic layer (preflight, strategy, storage, monitor rules) is already generic. The tools layer and monitor I/O are tightly coupled to Capital.com response shapes.
+See `docs/SYSTEM_DESIGN.md` §3.9 for the full analysis. The logic layer (preflight, strategy, storage, monitor rules) is already generic. The tools layer and monitor I/O are tightly coupled to Capital.com response shapes.
 
 - [ ] Define `BrokerClient` Protocol + normalized data types in `broker/protocol.py`
   - [ ] `Position`, `OHLCBar`, `AccountInfo`, `Sentiment`, `OrderRequest`, `ExecutionResult` dataclasses

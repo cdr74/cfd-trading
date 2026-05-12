@@ -1,9 +1,9 @@
 # CFD Trading System — Strategy Catalog & Mathematical Reference
 
-**Version:** 1.1  
-**Date:** April 2026  
-**Status:** In Design — S1 and S2 implemented; S3 deferred  
-**Companion to:** `README.md`, `config/strategies/`, `src/cfd_trading/tools/scan_tools.py`  
+**Version:** 1.2  
+**Date:** May 2026  
+**Status:** S1 (momentum) and S2 (mean reversion) fully implemented and backtested; S3 deferred  
+**Companion to:** `docs/SYSTEM_DESIGN.md`, `config/strategies/`, `src/cfd_trading/tools/scan_tools.py`, `docs/BACKTESTING.md`  
 **Repo:** github.com/cdr74/cfd-trading (private)
 
 > **Authoritativeness note:** Where this document conflicts with `README.md` or the
@@ -147,7 +147,7 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 | EMA_slope | `EMA_9[t] - EMA_9[t-3]` | Direction confirmation |
 | spread_pct | Already computed by `analyze_instrument` | Cost-viability check |
 
-**Implementation note:** EMA_9, EMA_21, signal_t, and z_t are not yet computed by `analyze_instrument`. They will be added when S1 is wired up — computed from the same 60 × 1-min bars already fetched, no additional API call required.
+**Implementation note:** EMA_9, EMA_21 are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). `signal_t` (EMA_9 − EMA_21) and trend slope are also returned. The normalised z_t (signal_t / rolling_std) is not yet computed — Claude reasons qualitatively over the gap instead.
 
 ### 5.3 Stop Loss & Take Profit Rules
 
@@ -200,7 +200,7 @@ z_t     = (close_bid_t - mu_t) / sigma_t
 | 1.0 < \|z_t\| < 2.0 | Wait — not extended enough to justify entry |
 | \|z_t\| > 3.0 | Extreme — possible trend break; do not enter, re-evaluate regime |
 
-**Implementation note:** mu_t, sigma_t, and z_t are not yet computed by `analyze_instrument`. They will be added when S2 is wired up — all computed from the 60 × 1-min bars already fetched.
+**Implementation note:** mu_t, sigma_t, and z_t (20-bar window) are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). The exit zone (|z_t| < 0.3) is not enforced by the monitor — Claude detects it at the next analysis call.
 
 ### 6.2 Regime Validity Check (Critical)
 
@@ -348,13 +348,11 @@ suggested_size = (target_risk_pct * account_balance) / (ATR_14 * price)
 | Low ATR (quiet session) | Larger position — bounded by `max_size` in YAML |
 | ATR below minimum threshold | No trade — cost-to-volatility ratio too poor |
 
-### Implementation requirements (not yet in place)
+### Implementation (Phase 9 — Done)
 
-1. **`target_risk_pct` needs to be added to each strategy YAML** — not currently a field in `momentum.yaml` or `mean_reversion.yaml`.
-2. **Account balance needs to be passed into `analyze_instrument` output** — it is available in session state (via `get_account_info()`) but not currently included in the tool's return value.
-3. **`analyze_instrument` computes `suggested_size`** and returns it alongside the other indicators. Claude may propose smaller. Claude may NOT propose larger. Preflight validates against YAML `max_size`.
-
-Until these are in place, Claude uses YAML `min_size`/`max_size` as sizing bounds and reasons about ATR qualitatively when proposing size.
+1. **`target_risk_pct` is set in each strategy YAML** — `momentum.yaml`: 1.0%, `mean_reversion.yaml`: 0.5%.
+2. **Account balance is fetched inside `analyze_instrument`** via `get_account_info()` and included in the `account` block of the response.
+3. **`analyze_instrument` computes and returns `suggested_size`** = `target_risk_pct / 100 × balance / ATR`. Claude may propose smaller. Claude may NOT propose larger. Preflight validates against YAML `max_size`.
 
 ---
 
@@ -391,7 +389,7 @@ Values below reflect the current `config/strategies/*.yaml` files, which are the
 | `position_scaling.enabled` | true | false | true |
 | `position_scaling.max_adds` | 2 | 0 | 1 |
 | `time_exit.close_minutes_before_session_end` | 30 | 30 | 30 |
-| `target_risk_pct` *(planned)* | TBD | TBD | TBD |
+| `target_risk_pct` | 1.0% | 0.5% | TBD |
 
 S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt modules.
 
@@ -407,15 +405,15 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 | `scan.md` — regime classification + ranking criteria | High | **Done** |
 | `momentum.md` — S1 prompt module | High | **Done** |
 | `mean_reversion.md` — S2 prompt module | High | **Done** |
-| Add EMA_9, EMA_21, signal_t, z_t computation to `analyze_instrument` for S1 | High | Not started |
-| Add rolling z-score (mu_t, sigma_t, z_t) computation to `analyze_instrument` for S2 | High | Not started |
-| Add `target_risk_pct` to strategy YAMLs + vol-scaled `suggested_size` to `analyze_instrument` | Medium | Not started |
-| Fold sentiment overlay reasoning into `momentum.md` and (future) `breakout.md` | Medium | Not started |
+| EMA_9, EMA_21, trend slope in `analyze_instrument` (S1) | High | **Done** (Phase 9) |
+| Rolling z-score (mu_t, sigma_t, z_t) in `analyze_instrument` (S2) | High | **Done** (Phase 9) |
+| `target_risk_pct` in strategy YAMLs + vol-scaled `suggested_size` | Medium | **Done** (Phase 9) |
+| Backtesting framework — validate signal edge before live tuning | High | **Done** (Phase 10) |
+| Fold sentiment overlay reasoning into `momentum.md` | Medium | Not started |
 | Tune EMA fast/slow windows per asset on demo data | Medium | Not started |
 | Tune z-score entry/exit thresholds per asset (S2) | Medium | Not started |
-| Estimate Claude context token budget per cycle (indicators + candles + prompt) | Medium | Not started |
-| Implement S0 random baseline for statistical comparison | Medium | Not started |
-| Define p-value promotion gate (demo → live) | Medium | Not started |
+| S0 random baseline for statistical comparison | Medium | Not started |
+| p-value promotion gate (demo → live) — E_net > 0, 30+ trades, p < 0.05 | Medium | Not started |
 | Write `breakout.yaml` and `breakout.md` (S3) | Low | Deferred |
 | Calibrate Donchian lookback k per asset class (S3) | Low | Deferred |
 | Evaluate Alpha Vantage for macro regime context (S1 filter) | Low | Deferred |

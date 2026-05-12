@@ -1,6 +1,6 @@
 # CLAUDE.md — Collaboration Guide for Claude Code
 
-This file governs how we work together on this project. Read it at the start of every implementation session alongside README.md.
+This file governs how we work together on this project. Read it at the start of every implementation session alongside `docs/SYSTEM_DESIGN.md` and `TODO.md`.
 
 ---
 
@@ -13,9 +13,9 @@ If anything is unclear, ambiguous, or has multiple reasonable approaches, stop a
 This applies to:
 - Architecture choices (how components connect, data flow, interface design)
 - Scope questions (what belongs in v1 vs. deferred)
-- Any deviation from what README.md specifies
+- Any deviation from what `docs/SYSTEM_DESIGN.md` specifies
 
-When a design decision is made in conversation, update README.md before implementing. The README is the source of truth — the code follows it, not the other way around.
+When a design decision is made in conversation, update `docs/SYSTEM_DESIGN.md` before implementing. That document is the source of truth — the code follows it, not the other way around. For algorithm/strategy changes, also update `docs/CFD_STRATEGY_CATALOG.md`.
 
 If an implementation reveals a conflict with a prior design decision, flag it explicitly rather than silently working around it.
 
@@ -127,7 +127,7 @@ pip install -e ".[dev]"
 
 At the start of every implementation session:
 
-1. Read `README.md` — confirm you understand the current design state
+1. Read `docs/SYSTEM_DESIGN.md` — confirm you understand the current architecture and design decisions
 2. Read `TODO.md` — identify what is in progress and what is next
 3. Check `git status` — understand what has already been changed
 4. Verify containers are running: `podman ps` — should show `cfd-trading` and `capital-mcp-server`

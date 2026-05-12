@@ -6,6 +6,7 @@ entry:
   max_size: 3.0
 
 risk:
+  target_risk_pct: 0.5
   stop_loss:
     type: HARD
     default_pct: 1.5

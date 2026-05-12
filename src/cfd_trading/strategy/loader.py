@@ -9,6 +9,7 @@ import yaml
 REQUIRED_YAML_FIELDS = [
     ("entry", "min_size"),
     ("entry", "max_size"),
+    ("risk", "target_risk_pct"),
     ("risk", "stop_loss", "max_pct"),
     ("risk", "trailing_stop", "enabled"),
     ("risk", "take_profit", "min_rr_ratio"),

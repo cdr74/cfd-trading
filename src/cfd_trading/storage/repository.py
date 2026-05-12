@@ -1,4 +1,4 @@
-"""CRUD operations: sessions, trades, cycle_snapshots, reasoning_traces."""
+"""CRUD operations: sessions, trades, cycle_snapshots, reasoning_traces, ohlc_bars."""
 
 import json
 import sqlite3
@@ -9,6 +9,50 @@ from datetime import datetime, timezone
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# OHLC bars
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OHLCBar:
+    epic: str
+    resolution: str
+    ts: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+def get_bars(
+    conn: sqlite3.Connection,
+    epic: str,
+    resolution: str,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
+) -> list[OHLCBar]:
+    """Return bars for epic/resolution in chronological order.
+
+    from_ts / to_ts are inclusive Unix timestamps (seconds UTC).
+    Omit either bound to fetch from the beginning or up to the latest bar.
+    """
+    query = "SELECT epic, resolution, ts, open, high, low, close, volume FROM ohlc_bars WHERE epic=? AND resolution=?"
+    params: list = [epic, resolution]
+
+    if from_ts is not None:
+        query += " AND ts >= ?"
+        params.append(from_ts)
+    if to_ts is not None:
+        query += " AND ts <= ?"
+        params.append(to_ts)
+
+    query += " ORDER BY ts ASC"
+
+    rows = conn.execute(query, params).fetchall()
+    return [OHLCBar(*row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
