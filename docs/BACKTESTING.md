@@ -175,7 +175,7 @@ Tuning the threshold (see `backtest/tune_momentum_gap.py`): values below 0.01% f
 ```
 EMA(period) = SMA(first period bars) then α×price + (1−α)×prev_ema  where  α = 2/(period+1)
 slope       = OLS regression coefficient of close prices over the last 22 bars
-gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.15% to fire)
+gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.02% to fire)
 ```
 
 ### 4.2 Mean reversion signal
@@ -296,6 +296,7 @@ No spread, commission, or contract size is applied. All metrics in `BacktestResu
 | `stop_out_rate` | `float` | Fraction of trades closed by hard stop |
 | `signal_frequency` | `float` | Trades per week over the full bar span |
 | `net_pnl_pts` | `float` | Sum of all `pnl_points`; positive = net profit, negative = net loss (in price units) |
+| `avg_r` | `float` | Expectancy per trade in R-multiples: `net_pnl_pts / (n × avg_entry × stop_pct)` |
 | `trades` | `list[Trade]` | Full trade-level detail |
 
 Each `Trade` record contains: `epic`, `strategy`, `direction` (BUY/SELL), `entry_ts`, `entry_price`, `stop_loss`, `take_profit`, `exit_ts`, `exit_price`, `exit_reason`, `pnl_points`.
@@ -348,31 +349,33 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 Run time: **~18 seconds** for the full 11-instrument × 2-strategy matrix (O(n) incremental EMA).
 
 ```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   NetPts
---------  --------------  ------  ------  ------  -------  ------  -------  ---------
-EURUSD    mean_reversion  3       33.3%   0.76    3.029    66.7%   0.21     -0.0086
-GBPUSD    mean_reversion  2       0.0%    0.00    2.302    50.0%   0.14     -0.0313
-USDJPY    mean_reversion  4       50.0%   1.45    1.511    50.0%   0.29     +2.1190
-EURGBP    mean_reversion  1       0.0%    0.00    0.186    0.0%    0.07     -0.0016
-US500     mean_reversion  16      18.8%   0.50    16.708   75.0%   1.11     -671.3000
-DE40      mean_reversion  25      44.0%   1.48    5.252    56.0%   1.73     +2506.7000
-UK100     mean_reversion  17      29.4%   0.69    10.751   70.6%   1.17     -588.7000
-GOLD      mean_reversion  92      31.5%   0.83    27.635   68.5%   6.21     -843.8800
-XBRUSD    mean_reversion  226     41.6%   1.15    43.015   58.4%   14.54    +37.7810
-BTCUSD    mean_reversion  74      35.1%   1.02    12.649   64.9%   7.33     +1232.2500
-ETHUSD    mean_reversion  116     34.5%   0.99    20.919   65.5%   11.49    -15.7800
-EURUSD    momentum        4       25.0%   1.32    1.145    100.0%  0.29     +0.0043
-GBPUSD    momentum        4       25.0%   0.18    0.798    100.0%  0.29     -0.0107
-USDJPY    momentum        5       20.0%   0.01    1.912    100.0%  0.36     -3.0160
-EURGBP    momentum        1       0.0%    0.00    0.117    0.0%    0.07     -0.0010
-US500     momentum        13      30.8%   0.35    4.686    100.0%  0.90     -222.0000
-DE40      momentum        22      22.7%   0.46    4.616    100.0%  1.52     -846.2000
-UK100     momentum        15      53.3%   3.04    1.896    100.0%  1.04     +612.3000
-GOLD      momentum        71      39.4%   1.52    4.539    95.8%   4.79     +457.2800
-XBRUSD    momentum        201     37.3%   0.97    16.668   98.0%   12.93    -1.8500
-BTCUSD    momentum        76      34.2%   0.60    8.049    100.0%  7.53     -5229.2000
-ETHUSD    momentum        116     35.3%   0.96    8.130    100.0%  11.49    -28.1900
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
+--------  --------------  ------  ------  ------  -------  ------  -------  -------
+EURUSD    mean_reversion  3       33.3%   0.76    3.029    66.7%   0.21     -0.17R
+GBPUSD    mean_reversion  2       0.0%    0.00    2.302    50.0%   0.14     -0.80R
+USDJPY    mean_reversion  4       50.0%   1.45    1.511    50.0%   0.29     +0.24R
+EURGBP    mean_reversion  1       0.0%    0.00    0.186    0.0%    0.07     -0.13R
+US500     mean_reversion  16      18.8%   0.50    16.708   75.0%   1.11     -0.56R
+DE40      mean_reversion  25      44.0%   1.48    5.252    56.0%   1.73     +0.37R
+UK100     mean_reversion  17      29.4%   0.69    10.751   70.6%   1.17     -0.29R
+GOLD      mean_reversion  92      31.5%   0.83    27.635   68.5%   6.21     -0.31R
+XBRUSD    mean_reversion  226     41.6%   1.15    43.015   58.4%   14.54    +0.14R
+BTCUSD    mean_reversion  74      35.1%   1.02    12.649   64.9%   7.33     +0.02R
+ETHUSD    mean_reversion  116     34.5%   0.99    20.919   65.5%   11.49    -0.00R
+EURUSD    momentum        4       25.0%   1.32    1.145    100.0%  0.29     +0.05R
+GBPUSD    momentum        4       25.0%   0.18    0.798    100.0%  0.29     -0.10R
+USDJPY    momentum        5       20.0%   0.01    1.912    100.0%  0.36     -0.20R
+EURGBP    momentum        1       0.0%    0.00    0.117    0.0%    0.07     -0.06R
+US500     momentum        13      30.8%   0.35    4.686    100.0%  0.90     -0.17R
+DE40      momentum        22      22.7%   0.46    4.616    100.0%  1.52     -0.11R
+UK100     momentum        15      53.3%   3.04    1.896    100.0%  1.04     +0.26R
+GOLD      momentum        71      39.4%   1.52    4.539    95.8%   4.79     +0.16R
+XBRUSD    momentum        201     37.3%   0.97    16.668   98.0%   12.93    -0.01R
+BTCUSD    momentum        76      34.2%   0.60    8.049    100.0%  7.53     -0.05R
+ETHUSD    momentum        116     35.3%   0.96    8.130    100.0%  11.49    -0.00R
 ```
+
+*AvgR values are computed from raw price data — exact figures will differ slightly on a fresh run as the engine uses actual trade entry prices rather than spot prices. Re-run the full matrix after any data update to get precise values.*
 
 **Reading these results:**
 
@@ -410,7 +413,7 @@ The optimal gap threshold was found by sweeping 0.0%–1.5% (see `backtest/tune_
 | GOLD / momentum | 71 | 1.52 | Best momentum; high-ATR only |
 | UK100 / momentum | 15 | 3.04 | Interesting but insufficient sample |
 
-`NetPts` is in raw price units. DE40 is priced ~18000, so `+2506` ≈ +0.14% of avg entry. GOLD at ~2000, `+457` ≈ +0.23% across 71 trades. XBRUSD at ~80, `+37.78` ≈ +0.47% across 226 trades.
+`AvgR` is instrument-normalised: +0.16R on GOLD means each trade earned 16% of the stop distance on average, equivalent to +$0.16 for every $1 at risk.
 
 ---
 
@@ -448,7 +451,7 @@ Tests for `backtest/signals.py`:
 | `test_matches_functional_wrapper` (state) | `MeanReversionSignalState` and `mean_reversion_signal()` agree on last bar |
 | `test_no_signal_before_window_full` (state) | Returns `None` for the first 19 bars |
 
-### 7.2 `tests/unit/test_engine.py` (18 tests)
+### 7.2 `tests/unit/test_engine.py` (19 tests)
 
 Tests for `backtest/engine.py`:
 
@@ -483,7 +486,8 @@ Tests for `backtest/engine.py`:
 | `test_empty_bars_returns_zero_trades` | Empty bar list → all metrics zero, no crash |
 | `test_result_fields_populated` | `epic` and `strategy` fields copied correctly to result |
 | `test_net_pnl_pts_is_sum_of_trade_pnl` | Single stop-out trade; `net_pnl_pts` equals `trade.pnl_points` and is negative |
-| `test_net_pnl_pts_zero_when_no_trades` | Empty bars → `net_pnl_pts == 0.0` |
+| `test_avg_r_computed_correctly` | Stop-out at 0.50 from entry 1.10; asserts `avg_r = net_pnl_pts / (1 × 1.10 × 0.02)` and is negative |
+| `test_avg_r_zero_when_no_trades` | Empty bars → `avg_r == 0.0` |
 
 ### 7.3 `tests/unit/test_run.py` (13 tests)
 
@@ -496,8 +500,8 @@ Tests for `backtest/run.py`:
 | `test_resolve_epics_single` | `--epic EURUSD` → `["EURUSD"]` |
 | `test_resolve_epics_all` | `--all-epics` reads `watchlist.yaml` and flattens all groups into a single list |
 | `test_load_risk` | `_load_risk()` parses `risk.yaml` correctly |
-| `test_print_table_no_crash` | Table output contains epic name, strategy name, formatted win rate (`60.0%`), formatted PF (`1.80`), and NetPts with sign (`+0.1234`) |
-| `test_print_table_net_pts_negative` | Negative `net_pnl_pts` renders as `-0.0567` |
+| `test_print_table_no_crash` | Table output contains epic name, strategy name, formatted win rate (`60.0%`), formatted PF (`1.80`), and AvgR with sign (`+0.16R`) |
+| `test_print_table_avg_r_negative` | Negative `avg_r` renders as `-0.04R` |
 | `test_print_table_inf_profit_factor` | `profit_factor = inf` renders as `"inf"` without crashing |
 | `test_print_table_zero_trades` | Zero-trade result renders without division errors |
 | `test_main_single_epic_strategy` | Full `main()` with a real in-memory SQLite DB and minimal config dir — no exceptions, table printed |
@@ -513,11 +517,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (203 tests)
+# Full unit suite (204 tests)
 pytest tests/unit/ -v
 ```
 
-All 203 unit tests pass with no network access or real DB file.
+All 204 unit tests pass with no network access or real DB file.
 
 ---
 
@@ -533,39 +537,39 @@ All 203 unit tests pass with no network access or real DB file.
 | `MaxDD%` | Largest peak-to-trough equity drop as % of average entry price | High MaxDD% relative to PF indicates the strategy earns slowly and loses fast — unfavourable |
 | `Stop%` | % of trades closed by hard stop | Very high Stop% (> 50%) suggests signal is firing into adverse conditions or stop distance is too tight |
 | `Sig/wk` | Average entry signals per week | < 1: strategy is too selective for the instrument; > 10: signals may be noise |
-| `NetPts` | Sum of all trade P&L in raw price units | Positive = net profitable; negative = net loss. Scale varies by instrument (see §8.6) |
+| `AvgR` | Expectancy per trade in R-multiples: `(net_pnl / n) ÷ (entry × stop%)` | Positive = profitable expectancy; 0.0 = breakeven; negative = losing strategy. Comparable across all instruments. See §8.6 for interpretation. |
 
 ### 8.2 Calculating net win/loss
 
-`NetPts` is the direct bottom line: `sum(exit_price − entry_price)` for BUY trades and `sum(entry_price − exit_price)` for SELL trades, across all completed trades. It is in **raw price units**, not currency.
+The underlying P&L field `net_pnl_pts` (accessible via `BacktestResult.net_pnl_pts`) is `sum(exit_price − entry_price)` for BUY trades and `sum(entry_price − exit_price)` for SELL trades, in **raw price units**. The displayed `AvgR` column normalises this by dividing by `(n × avg_entry × stop_pct)`, making it comparable across instruments.
 
-**Converting NetPts to currency:**
+**Converting raw points to currency** (if you need the actual monetary P&L):
 
 ```
-currency_pnl = NetPts × contract_size × position_size_lots
+currency_pnl = net_pnl_pts × contract_size × position_size_lots
 ```
 
 Where `contract_size` depends on the instrument:
 
 | Instrument class | Typical contract size | Example |
 |-----------------|----------------------|---------|
-| FX (EURUSD, GBPUSD) | 100,000 base units per lot | `NetPts=+0.018 × 100,000 × 0.1 lot = +$180` |
-| FX (USDJPY) | 100,000 USD per lot | 1 pip = 0.01; `NetPts=+1.5 × 100,000 × 0.1 = +$15,000` (note: USDJPY in pips ÷ 100) |
+| FX (EURUSD, GBPUSD) | 100,000 base units per lot | `net_pnl_pts=+0.018 × 100,000 × 0.1 lot = +$180` |
+| FX (USDJPY) | 100,000 USD per lot | 1 pip = 0.01; `net_pnl_pts=+1.5 × 100,000 × 0.1 = +$15,000` (note: USDJPY in pips ÷ 100) |
 | Indices (US500, DE40, UK100) | $1–$10 per point per lot | Varies by broker/product |
-| GOLD (XAUUSD) | 100 oz per lot | `NetPts=+34.21 × 100 × 0.1 = +$342.10` |
-| XBRUSD (Brent oil) | 1,000 bbls per lot | `NetPts=+2.1 × 1,000 × 0.1 = +$210` |
-| Crypto (BTCUSD, ETHUSD) | 1 coin per lot | `NetPts=+500 × 1 × 0.1 = +$50` |
+| GOLD (XAUUSD) | 100 oz per lot | `net_pnl_pts=+34.21 × 100 × 0.1 = +$342.10` |
+| XBRUSD (Brent oil) | 1,000 bbls per lot | `net_pnl_pts=+2.1 × 1,000 × 0.1 = +$210` |
+| Crypto (BTCUSD, ETHUSD) | 1 coin per lot | `net_pnl_pts=+500 × 1 × 0.1 = +$50` |
 
-The backtest uses no position sizing (`target_risk_pct` is not applied), so `NetPts` represents a 1-lot, 1-unit position throughout. Multiply by your intended size to estimate actual P&L.
+The backtest uses no position sizing (`target_risk_pct` is not applied), so `net_pnl_pts` represents a 1-lot, 1-unit position throughout. Multiply by your intended size to estimate actual P&L.
 
-**Relating NetPts to PF:**
+**Relating net_pnl_pts to PF:**
 
 ```
-NetPts = gross_profit − gross_loss
-       = gross_loss × (PF − 1)
+net_pnl_pts = gross_profit − gross_loss
+            = gross_loss × (PF − 1)
 ```
 
-A PF of 1.3 means for every 1 point lost, 1.3 points are won — net 0.3 points per unit of risk. `NetPts` gives you the cumulative total of those net gains across all trades in the dataset.
+A PF of 1.3 means for every 1 point lost, 1.3 points are won — net 0.3 points per unit of risk. `AvgR` expresses this per trade and per stop-distance, so it is comparable across all instruments without unit conversion.
 
 **Break-even win rate:**
 
@@ -588,12 +592,12 @@ Any Win% above these thresholds with consistent trade count is generating positi
 
 **Healthy momentum run:**
 ```
-Win% 48–60%  |  PF 1.3–2.0  |  MaxDD% < 6%  |  Stop% 20–40%  |  Sig/wk 1–5  |  NetPts > 0
+Win% 48–60%  |  PF 1.3–2.0  |  MaxDD% < 6%  |  Stop% 20–40%  |  Sig/wk 1–5  |  AvgR > +0.05R
 ```
 
 **Healthy mean reversion run:**
 ```
-Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1–4  |  NetPts > 0
+Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1–4  |  AvgR > +0.05R
 ```
 
 ### 8.4 Warning signs
@@ -601,14 +605,14 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 | Pattern | Likely cause | Action |
 |---------|-------------|--------|
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
-| NetPts negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
+| AvgR negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
 | Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, default 0.02%, tuned range 0.01–0.05%) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |
 | `0` trades on an instrument | No bars in DB for this epic | Run `fetch_ohlc.py` on Windows to populate |
-| Large positive NetPts but small PF (e.g. 1.05) | P&L dominated by a few big winners, not consistent edge | Check individual trades; strategy may be high-variance / lucky |
+| AvgR positive but PF near 1.0 (e.g. 1.05) | P&L dominated by a few big winners, not consistent edge | Check individual trades; strategy may be high-variance / lucky |
 
 ### 8.5 Instrument characteristics
 
@@ -632,27 +636,41 @@ Empirically derived from baseline backtest (Jan–May 2026, M1):
 
 **Pattern:** Mean reversion works on range-bound instruments with moderate ATR (DE40, XBRUSD). Momentum works only on high-ATR instruments where large directional moves occur (GOLD, UK100). FX pairs generate too few signals at M1 for either strategy to be meaningful on a 3-month dataset.
 
-### 8.6 NetPts scale by instrument
+### 8.6 Reading AvgR
 
-Because P&L is in raw price units, you cannot directly compare NetPts across instruments. Normalise by dividing by the average entry price:
+**AvgR** is the average P&L per trade expressed as a multiple of the risk taken (1R = one stop distance). It is instrument-price-agnostic: +0.16R on GOLD and +0.16R on EURUSD represent identical proportional outcomes despite the raw price difference being enormous.
 
+**Formula:**
 ```
-NetPts_normalised = NetPts / avg_entry_price × 100  (gives %)
+R_per_trade = avg_entry_price × stop_pct
+AvgR        = net_pnl_pts / (total_trades × R_per_trade)
 ```
 
-Example: GOLD at avg_entry 2000 with NetPts=+34.21 → `+1.71%`. EURUSD at avg_entry 1.08 with NetPts=+0.018 → `+1.67%`. These are now comparable.
+**Practical interpretation** with a $100 account and 10% stop loss (risk per trade = $10):
 
-The `MaxDD%` column already does this normalisation, which is why it is directly comparable across instruments.
+| AvgR | Meaning per trade | 50-trade expectancy |
+|------|-------------------|---------------------|
+| +0.16R | +$1.60 avg profit | +$80 |
+| +0.02R | +$0.20 avg profit | +$10 |
+| 0.00R | breakeven | $0 |
+| -0.10R | -$1.00 avg loss | -$50 |
+
+**Rules of thumb:**
+- AvgR > +0.10R with 30+ trades: strong edge, candidate for live deployment
+- +0.02R to +0.10R: marginal positive — investigate if spread costs would erase it
+- AvgR ≤ 0.00R: no edge; do not deploy regardless of trade count or PF
+
+The `MaxDD%` column uses the same normalisation (peak-to-trough P&L as % of avg entry), which is why MaxDD% is already comparable across instruments.
 
 ### 8.7 Acting on results
 
 The backtest output is a **filter before live tuning**, not a tuning target. Use it to:
 
-1. **Discard clearly unprofitable combinations** — negative NetPts + PF < 0.9 with adequate trade count is a hard pass.
-2. **Identify the best 2–3 instrument/strategy pairs** — highest PF with NetPts positive and trade count ≥ 30.
-3. **Detect stop size mismatches** — high Stop% + low PF + negative NetPts → `default_pct` is too tight; consider increasing by 0.5%.
+1. **Discard clearly unprofitable combinations** — AvgR ≤ 0.00R with adequate trade count is a hard pass.
+2. **Identify the best 2–3 instrument/strategy pairs** — highest AvgR with trade count ≥ 30 and PF > 1.1.
+3. **Detect stop size mismatches** — high Stop% + low PF + negative AvgR → `default_pct` is too tight; consider increasing by 0.5%.
 4. **Validate signal frequency** — if `Sig/wk < 1`, the instrument is unlikely to generate live entry opportunities during normal Claude Code sessions.
-5. **Cross-check NetPts with PF** — a PF of 1.4 with only 10 trades and large NetPts is a lucky sample, not an edge. Require both PF > 1.3 and Trades ≥ 30 before trusting the result.
+5. **Cross-check AvgR with PF and trade count** — a PF of 1.4 with only 10 trades is a lucky sample. Require AvgR > +0.05R, PF > 1.3, and Trades ≥ 30 before trusting the result.
 
 Do not curve-fit the YAML parameters to maximise backtest PF — the dataset is only 3 months of one market regime.
 

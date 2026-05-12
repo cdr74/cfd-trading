@@ -46,6 +46,7 @@ SAMPLE_RESULT = BacktestResult(
     stop_out_rate=0.2,
     signal_frequency=2.5,
     net_pnl_pts=0.1234,
+    avg_r=0.16,
     trades=[],
 )
 
@@ -116,21 +117,21 @@ def test_print_table_no_crash(capsys):
     assert "momentum" in out
     assert "60.0%" in out      # win_rate formatted
     assert "1.80" in out       # profit_factor formatted
-    assert "+0.1234" in out    # net_pnl_pts with sign
+    assert "+0.16R" in out     # avg_r with sign and R suffix
 
 
-def test_print_table_net_pts_negative(capsys):
+def test_print_table_avg_r_negative(capsys):
     r = BacktestResult(
         epic="EURUSD", strategy="momentum",
         total_trades=5, winning_trades=1,
         win_rate=0.2, profit_factor=0.5,
         max_drawdown_pct=4.0, stop_out_rate=0.8,
-        signal_frequency=3.0, net_pnl_pts=-0.0567,
+        signal_frequency=3.0, net_pnl_pts=-0.0567, avg_r=-0.04,
         trades=[],
     )
     run_mod._print_table([r])
     out = capsys.readouterr().out
-    assert "-0.0567" in out
+    assert "-0.04R" in out
 
 
 def test_print_table_inf_profit_factor(capsys):

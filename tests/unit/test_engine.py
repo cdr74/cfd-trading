@@ -261,6 +261,20 @@ class TestMetrics:
         assert result.net_pnl_pts == pytest.approx(expected_net, abs=1e-4)
         assert result.net_pnl_pts < 0
 
-    def test_net_pnl_pts_zero_when_no_trades(self, momentum_cfg):
+    def test_avg_r_computed_correctly(self, momentum_cfg):
+        # entry=1.10, stop_pct=0.02, net_pnl=-0.60 (crash to 0.50)
+        # R = 1.10 * 0.02 = 0.022; avg_r = -0.60 / (1 * 0.022) ≈ -27.27
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        crash_bar = _bar(23 * 60, 0.50)
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        expected_r = result.net_pnl_pts / (1 * 1.10 * 0.02)
+        assert result.avg_r == pytest.approx(expected_r, rel=1e-3)
+        assert result.avg_r < 0
+
+    def test_avg_r_zero_when_no_trades(self, momentum_cfg):
         result = run_backtest("EURUSD", "momentum", [], momentum_cfg, RISK_CFG)
-        assert result.net_pnl_pts == 0.0
+        assert result.avg_r == 0.0

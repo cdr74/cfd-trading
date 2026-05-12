@@ -45,6 +45,7 @@ class BacktestResult:
     stop_out_rate: float
     signal_frequency: float     # trades per week
     net_pnl_pts: float = 0.0   # sum of all pnl_points; sign indicates profit/loss
+    avg_r: float = 0.0          # expectancy per trade in R-multiples
     trades: list[Trade] = field(default_factory=list)
 
 
@@ -138,7 +139,7 @@ def run_backtest(
         open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, last.close)
         completed.append(open_trade)
 
-    return _summarise(epic, strategy, completed, bars)
+    return _summarise(epic, strategy, completed, bars, stop_pct)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ def _pnl(direction: str, entry: float, exit_price: float) -> float:
 
 
 def _summarise(
-    epic: str, strategy: str, trades: list[Trade], bars: list[OHLCBar]
+    epic: str, strategy: str, trades: list[Trade], bars: list[OHLCBar], stop_pct: float = 0.0
 ) -> BacktestResult:
     n = len(trades)
     if n == 0:
@@ -190,6 +191,10 @@ def _summarise(
 
     net_pnl_pts = round(sum(t.pnl_points or 0 for t in trades), 4)
 
+    # AvgR: average P&L per trade expressed as a multiple of the risk taken (1R = stop distance)
+    r_per_trade = avg_entry * stop_pct
+    avg_r = round(net_pnl_pts / (n * r_per_trade), 4) if (n > 0 and r_per_trade > 0) else 0.0
+
     return BacktestResult(
         epic=epic,
         strategy=strategy,
@@ -201,5 +206,6 @@ def _summarise(
         stop_out_rate=round(len(stopped) / n, 3),
         signal_frequency=signal_frequency,
         net_pnl_pts=net_pnl_pts,
+        avg_r=avg_r,
         trades=trades,
     )
