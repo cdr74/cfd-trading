@@ -31,7 +31,7 @@ Every piece of logic gets a unit test. No exceptions.
 pytest tests/unit/ -v
 ```
 
-Currently **195 unit tests** passing.
+Currently **203 unit tests** passing.
 
 **What needs unit tests:**
 - `risk/preflight.py` — every validation rule, every edge case, every rejection path

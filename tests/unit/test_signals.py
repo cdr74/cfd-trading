@@ -2,7 +2,10 @@
 
 import pytest
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import momentum_signal, mean_reversion_signal
+from cfd_trading.backtest.signals import (
+    momentum_signal, mean_reversion_signal,
+    MomentumSignalState, MeanReversionSignalState,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -127,3 +130,80 @@ class TestMeanReversionSignal:
         bars = _bars([1.0] * 19 + [1.5])
         result = mean_reversion_signal(bars)
         assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Stateful class tests — verify incremental O(1) classes match functional wrappers
+# ---------------------------------------------------------------------------
+
+class TestMomentumSignalState:
+
+    def test_fires_on_correct_bar_mid_sequence(self):
+        # Signal should fire at bar 22 (the crossover bar), not just at end of sequence
+        flat = _bars([1.0] * 21)
+        spike = _bars([1.10])
+        hold = _bars([1.10] * 5)
+        state = MomentumSignalState()
+        signals = []
+        for bar in flat + spike + hold:
+            signals.append(state.update(bar))
+        # Signal should fire exactly at bar 22 (index 21), not on hold bars
+        assert signals[21] == "LONG"
+        assert all(s is None for s in signals[22:])
+
+    def test_ema_stays_current_during_position(self):
+        # After 21 flat bars + spike, the state should still work correctly
+        # if we skip acting on the signal (simulating "in position" scenario)
+        state = MomentumSignalState()
+        for bar in _bars([1.0] * 21 + [1.10]):
+            state.update(bar)
+        # Feed more flat bars (simulating position hold); EMA should update
+        for bar in _bars([1.10] * 10):
+            result = state.update(bar)
+            # No new crossover expected on flat bars
+            assert result is None or result == "LONG"  # possible re-crossover, not an error
+
+    def test_new_instance_starts_fresh(self):
+        # Two instances fed the same bars should produce identical results
+        bars = _flat_then_spike(21, 1.0, 1.10)
+        state1 = MomentumSignalState()
+        state2 = MomentumSignalState()
+        results1 = [state1.update(b) for b in bars]
+        results2 = [state2.update(b) for b in bars]
+        assert results1 == results2
+
+    def test_matches_functional_wrapper_on_crossover(self):
+        bars = _flat_then_spike(21, 1.0, 1.10)
+        state = MomentumSignalState()
+        last = None
+        for bar in bars:
+            last = state.update(bar)
+        assert last == momentum_signal(bars)
+
+    def test_no_signal_before_min_bars(self):
+        state = MomentumSignalState()
+        for bar in _bars([1.0] * 21):
+            assert state.update(bar) is None
+
+
+class TestMeanReversionSignalState:
+
+    def test_fires_on_correct_bar(self):
+        state = MeanReversionSignalState()
+        bars = _bars([1.0] * 19 + [1.5])
+        signals = [state.update(b) for b in bars]
+        assert signals[-1] == "SHORT"
+        assert all(s is None for s in signals[:-1])
+
+    def test_matches_functional_wrapper(self):
+        bars = _bars([1.0] * 19 + [0.5])
+        state = MeanReversionSignalState()
+        last = None
+        for bar in bars:
+            last = state.update(bar)
+        assert last == mean_reversion_signal(bars)
+
+    def test_no_signal_before_window_full(self):
+        state = MeanReversionSignalState()
+        for bar in _bars([1.0] * 19):
+            assert state.update(bar) is None

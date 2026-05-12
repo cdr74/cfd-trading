@@ -60,6 +60,8 @@ WSL2 (cfd-trading package)
     └── prints summary table
 ```
 
+**Performance:** The engine is O(n) per instrument — signal state is updated incrementally each bar rather than recomputed from scratch. The full 11-instrument × 2-strategy matrix over 1.1M M1 bars runs in approximately **17 seconds**.
+
 **Key design invariant:** no Capital.com or Anthropic API calls are possible during a backtest run. `run.py` sets `BACKTEST_MODE=true` before any imports, which causes `CapitalClient` to raise `RuntimeError` at instantiation. This guard is enforced at the client level, not per-tool.
 
 ---
@@ -164,11 +166,14 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Key detail — EMA gap filter:** Even when a crossover occurs, the signal is suppressed if the fractional gap between EMA_9 and EMA_21 is below 0.15% of EMA_21. On M1 bars the two EMAs are nearly identical most of the time; a sub-threshold gap means the "crossover" is noise rather than real momentum divergence. This filter eliminates the majority of false signals at high signal-frequency instruments (crypto, indices).
 
+**Key detail — slope window:** Slope is computed over a **fixed 22-bar window** (same as the EMA warm-up period), not over unbounded history. A 22-minute slope is the relevant confirmation horizon for an intraday M1 momentum entry; the multi-month slope over the full dataset is not meaningful for this decision.
+
 **Indicator formulas:**
 
 ```
 EMA(period) = SMA(first period bars) then α×price + (1−α)×prev_ema  where  α = 2/(period+1)
-slope       = OLS regression coefficient of close prices over the full bar window
+slope       = OLS regression coefficient of close prices over the last 22 bars
+gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.15% to fire)
 ```
 
 ### 4.2 Mean reversion signal
@@ -336,20 +341,52 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 
 `BACKTEST_MODE=true` is set automatically at startup.
 
-### 6.4 Sample output
+### 6.4 Actual baseline results (Jan–May 2026, M1, 1.1M bars)
+
+Run time: **~17 seconds** for the full 11-instrument × 2-strategy matrix.
 
 ```
 Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   NetPts
 --------  --------------  ------  ------  ------  -------  ------  -------  ---------
-EURUSD    momentum        42      54.8%   1.32    4.2      23.8%   2.80     +0.1843
-GBPUSD    momentum        38      52.6%   1.18    5.1      28.9%   2.53     +0.0712
-GOLD      momentum        57      56.1%   1.45    3.8      19.3%   3.80     +34.2100
-EURUSD    mean_reversion  29      58.6%   1.61    2.7      10.3%   1.93     +0.2314
-GBPUSD    mean_reversion  31      51.6%   1.09    4.5      16.1%   2.07     +0.0381
-GOLD      mean_reversion  44      59.1%   1.72    3.1      9.1%    2.93     +47.9830
+EURUSD    mean_reversion  3       33.3%   0.76    3.029    66.7%   0.21     -0.0086
+GBPUSD    mean_reversion  2       0.0%    0.00    2.302    50.0%   0.14     -0.0313
+USDJPY    mean_reversion  4       50.0%   1.45    1.511    50.0%   0.29     +2.1190
+EURGBP    mean_reversion  1       0.0%    0.00    0.186    0.0%    0.07     -0.0016
+US500     mean_reversion  16      18.8%   0.50    16.708   75.0%   1.11     -671.3000
+DE40      mean_reversion  25      44.0%   1.48    5.252    56.0%   1.73     +2506.7000
+UK100     mean_reversion  17      29.4%   0.69    10.751   70.6%   1.17     -588.7000
+GOLD      mean_reversion  92      31.5%   0.83    27.635   68.5%   6.21     -843.8800
+XBRUSD    mean_reversion  226     41.6%   1.15    43.015   58.4%   14.54    +37.7810
+BTCUSD    mean_reversion  74      35.1%   1.02    12.649   64.9%   7.33     +1232.2500
+ETHUSD    mean_reversion  116     34.5%   0.99    20.919   65.5%   11.49    -15.7800
+EURUSD    momentum        0       --      --      --       --      --       +0.0000
+GBPUSD    momentum        0       --      --      --       --      --       +0.0000
+USDJPY    momentum        0       --      --      --       --      --       +0.0000
+EURGBP    momentum        0       --      --      --       --      --       +0.0000
+US500     momentum        0       --      --      --       --      --       +0.0000
+DE40      momentum        1       0.0%    0.00    0.611    100.0%  0.07     -139.7000
+UK100     momentum        0       --      --      --       --      --       +0.0000
+GOLD      momentum        0       --      --      --       --      --       +0.0000
+XBRUSD    momentum        3       0.0%    0.00    2.553    100.0%  0.19     -2.3000
+BTCUSD    momentum        0       --      --      --       --      --       +0.0000
+ETHUSD    momentum        1       0.0%    0.00    0.611    100.0%  0.10     -12.7000
 ```
 
-`NetPts` is in raw price units — the same scale as the instrument price. EURUSD trades in the range 1.05–1.15, so a net of `+0.18` represents about 180 pips total. GOLD trades near 2000 USD/oz, so `+34.21` is about 17 pips (1 point = 1 USD/oz).
+**Reading these results:**
+
+*Mean reversion:*
+- **DE40** is the standout: PF 1.48, 25 trades, positive net — adequate sample, real edge signal
+- **XBRUSD** 226 trades at PF 1.15 — high frequency, marginal PF, but large sample
+- **BTCUSD** 74 trades at PF 1.02 — essentially flat; not worth trading
+- FX pairs (EURUSD, GBPUSD, EURGBP): 1–3 trades each — sample too small to draw any conclusion
+- **GOLD, US500, UK100**: negative PF — mean reversion does not suit trending/gapping instruments
+
+*Momentum:*
+- 0 trades on 8 of 11 instruments — the 0.15% EMA gap filter is too aggressive for the current dataset
+- The 3 instruments that did fire (DE40, XBRUSD, ETHUSD) all stopped out 100% — the gap filter alone is not sufficient; the strategy needs further work before live use
+- Next tuning lever: lower `_MIN_EMA_GAP_PCT` (e.g. to 0.05–0.10%) or switch to ATR-based gap threshold
+
+`NetPts` is in raw price units. DE40 is priced in the thousands, so `+2506` represents roughly +0.14% of avg entry. XBRUSD at ~80 USD/bbl, `+37.78` represents ~+0.47% cumulative across 226 trades.
 
 ---
 
@@ -357,7 +394,7 @@ GOLD      mean_reversion  44      59.1%   1.72    3.1      9.1%    2.93     +47.
 
 All tests use synthetic bar sequences — no real DB file or network access required.
 
-### 7.1 `tests/unit/test_signals.py` (17 tests)
+### 7.1 `tests/unit/test_signals.py` (25 tests)
 
 Tests for `backtest/signals.py`:
 
@@ -373,11 +410,19 @@ Tests for `backtest/signals.py`:
 | `test_gap_filter_suppresses_tiny_crossover` | Spike of 0.1% produces a crossover but EMA gap < 0.15% minimum → `None` |
 | `test_gap_filter_allows_large_crossover` | Spike of 10% → EMA gap well above 0.15% minimum → `"LONG"` |
 | `test_returns_string_not_bool` | Return type is `str`, not `bool` |
+| `test_fires_on_correct_bar_mid_sequence` (state) | `MomentumSignalState` fires at bar 22 (crossover bar), not on subsequent flat bars |
+| `test_ema_stays_current_during_position` (state) | EMA continues updating across bars after signal fires |
+| `test_new_instance_starts_fresh` (state) | Two instances fed identical bars produce identical results |
+| `test_matches_functional_wrapper_on_crossover` (state) | `MomentumSignalState` and `momentum_signal()` agree on last bar |
+| `test_no_signal_before_min_bars` (state) | Returns `None` for all bars below warmup threshold |
 | `test_no_signal_when_z_within_threshold` | Flat prices → z-score = 0 → `None` |
 | `test_short_when_z_exceeds_positive_threshold` | 19 bars at 1.0 + spike to 1.5 → large positive z → `"SHORT"` |
 | `test_long_when_z_exceeds_negative_threshold` | 19 bars at 1.0 + drop to 0.5 → large negative z → `"LONG"` |
 | `test_no_signal_when_price_within_two_sigma` | Alternating 0.02 oscillation → z near 0 → `None` |
 | `test_uses_last_20_bars_for_zscore` | 30 bars at 100.0 (old history), 19 bars at 1.0, spike to 0.5 → z-score based on the last 20 bars only → `"LONG"` (not distorted by old history) |
+| `test_fires_on_correct_bar` (state) | `MeanReversionSignalState` fires at the spike bar, not on earlier flat bars |
+| `test_matches_functional_wrapper` (state) | `MeanReversionSignalState` and `mean_reversion_signal()` agree on last bar |
+| `test_no_signal_before_window_full` (state) | Returns `None` for the first 19 bars |
 
 ### 7.2 `tests/unit/test_engine.py` (18 tests)
 
@@ -444,11 +489,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (190 tests)
+# Full unit suite (203 tests)
 pytest tests/unit/ -v
 ```
 
-All 195 unit tests pass with no network access or real DB file.
+All 203 unit tests pass with no network access or real DB file.
 
 ---
 

@@ -6,15 +6,15 @@ Prices: local SQLite ohlc_bars — no Capital.com API calls
 """
 
 from dataclasses import dataclass, field
-from typing import Callable
 
 from cfd_trading.monitor.monitor import evaluate_position
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import momentum_signal, mean_reversion_signal
+from cfd_trading.backtest.signals import MomentumSignalState, MeanReversionSignalState
 
-_SIGNAL_FNS: dict[str, Callable] = {
-    "momentum": momentum_signal,
-    "mean_reversion": mean_reversion_signal,
+# Maps strategy name → state class.  A fresh instance is created per run.
+_SIGNAL_STATES: dict[str, type] = {
+    "momentum": MomentumSignalState,
+    "mean_reversion": MeanReversionSignalState,
 }
 
 
@@ -61,10 +61,10 @@ def run_backtest(
     risk_config     — global section of risk.yaml (unused by evaluate_position directly,
                       kept for future preflight integration)
     """
-    if strategy not in _SIGNAL_FNS:
-        raise ValueError(f"Unknown strategy '{strategy}'. Available: {list(_SIGNAL_FNS)}")
+    if strategy not in _SIGNAL_STATES:
+        raise ValueError(f"Unknown strategy '{strategy}'. Available: {list(_SIGNAL_STATES)}")
 
-    signal_fn = _SIGNAL_FNS[strategy]
+    signal_state = _SIGNAL_STATES[strategy]()
     stop_pct = strategy_config["risk"]["stop_loss"]["default_pct"] / 100
     rr_ratio = strategy_config["risk"]["take_profit"]["min_rr_ratio"]
 
@@ -73,7 +73,8 @@ def run_backtest(
     current_stop: float | None = None
 
     for i, bar in enumerate(bars):
-        window = bars[: i + 1]
+        # Always update signal state so EMAs stay current even while in a position
+        signal = signal_state.update(bar)
 
         if open_trade is not None:
             # --- Manage open position ---
@@ -101,7 +102,6 @@ def run_backtest(
 
         else:
             # --- Check entry signal ---
-            signal = signal_fn(window)
             if signal is not None and i + 1 < len(bars):
                 next_bar = bars[i + 1]
                 entry_price = next_bar.open
