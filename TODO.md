@@ -264,6 +264,41 @@ See `docs/SYSTEM_DESIGN.md` §3.10 and `docs/BACKTESTING.md` for full design dec
   - [x] Sets `BACKTEST_MODE=true` at startup — no Capital.com or Anthropic API calls possible
   - [x] Unit tests — `tests/unit/test_run.py` — 11 tests; **190 unit tests passing** (up from 179)
 
+### 10.7 Backtest signal improvements (research-driven, M1-specific)
+
+From `docs/RESEARCH.md` (2026-05-12): At M1 resolution, H ≈ 0.50 (random walk). ITSM operates at 30-min scale.
+These improvements address the three cost/edge issues identified in research.
+
+- [x] **Step 1 — EMA gap filter 0.02% → 0.05%** (done 2026-05-12)
+  - `signals.py`: `_MIN_EMA_GAP_PCT = 0.0005` (was 0.0002)
+  - Rationale: 0.02% = 1.6 pts at 8,000 — barely above a 1-pt spread. 0.05% = 4 pts = 4× spread (positive signal/cost ratio). See `docs/RESEARCH.md` §Cost and Viability Thresholds.
+
+- [ ] **Step 2 — ATR(14) ≥ 4× spread gate for mean reversion entries**
+  - Mean reversion on M1 is structurally hostile (bid-ask bounce not tradeable). Only viable when volatility is high relative to spread cost.
+  - Blocks new mean reversion entries when `ATR(14) < 4 × spread_pct × price`. Existing 1.5% hard stop unchanged.
+  - **Design questions for next session:**
+    - **Q1 — How to supply spread per instrument?**
+      - (a) Add `spread_pct` per instrument to `risk.yaml` or `watchlist.yaml` (explicit, accurate, requires maintenance)
+      - (b) Hardcode per asset class in `signals.py`: indices ≈ 1pt/8000 ≈ 0.000125; FX ≈ 0.00010; crypto ≈ 0.001 (zero-maintenance but imprecise)
+      - (c) Single configurable global default in `signal_kwargs` (simplest, least accurate)
+    - **Q2 — ATR multiple:** Fix at 4× (research recommendation) or expose as tunable `signal_kwargs` parameter?
+    - **Q3 — Implement 5-bar max hold cap simultaneously?** (Research: exit flat if not moving toward target within 5 bars. Low-risk change, can be bundled.)
+    - **Key constraint:** User explicitly noted not losing stop-loss protection. ATR gate blocks entries only — does NOT affect stop loss, TP, or existing position management.
+
+- [ ] **Step 3 — 30-min directional bias signal (ITSM architecture)**
+  - M1 EMA crossover used as precise entry trigger; 30-min structure provides directional bias. Block entries that contradict M30 direction.
+  - **Design questions for next session:**
+    - **Q1 — How to derive M30 signal from M1 bars?**
+      - (a) In-engine rolling 30-bar OHLC aggregate built from the M1 bar stream (no new DB tables, O(n), pure Python). Downsides: open/high/low aggregation adds logic; partial first window.
+      - (b) Fetch M30 bars from MT5 separately and store in `ohlc_bars` with `resolution='M30'`. Cleaner but requires a second fetch pass and extra DB rows.
+      - (c) Use the 50-EMA (50-bar on M1 ≈ 50 min) as a simpler M30 proxy — already warm in `MomentumSignalState`. No new aggregation. Less theoretically pure but zero added complexity.
+    - **Q2 — What defines M30 "bullish"?**
+      - (a) Last complete 30-bar aggregate: close > open (simple, direct)
+      - (b) Price above a SMA/EMA of the aggregated M30 closes (smooths noise)
+      - (c) Slope of last 30 M1 closes (already computed in momentum state — zero added work)
+    - **Q3 — Gate strength:** Hard gate (block all entries against M30 direction) or soft gate (allow with reduced size)?
+    - **Key constraint:** M30 signal is an entry filter only. Stop loss configuration and position management rules unchanged.
+
 ---
 
 ## Deferred (v2+)

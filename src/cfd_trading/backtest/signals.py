@@ -23,7 +23,7 @@ from cfd_trading.storage.repository import OHLCBar
 # Tuned empirically: 0.02% gives the best trade count / signal quality balance
 # across the 11-instrument watchlist.  Higher values (>0.05%) leave too few trades
 # to be statistically meaningful; lower values (<0.01%) flood with noise signals.
-_MIN_EMA_GAP_PCT = 0.0002   # 0.02%
+_MIN_EMA_GAP_PCT = 0.0005   # 0.05% — research-validated floor for index CFDs (4 pts at 8,000)
 
 
 # ---------------------------------------------------------------------------

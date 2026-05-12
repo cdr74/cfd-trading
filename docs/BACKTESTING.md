@@ -168,7 +168,7 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. Prevents late-entry signals at trend exhaustion.
 
-**Key detail — EMA gap filter:** Suppresses near-identical EMA crossovers below `_MIN_EMA_GAP_PCT` (default **0.02%**). Tunable range: 0.01–0.05%. See `backtest/tune_momentum_gap.py`.
+**Key detail — EMA gap filter:** Suppresses near-identical EMA crossovers below `_MIN_EMA_GAP_PCT` (default **0.05%** — research-validated floor; 4 pts at 8,000 = 4× a 1-pt spread). Tunable range: 0.01–0.10%. See `backtest/tune_momentum_gap.py`.
 
 **Key detail — slope window:** Slope computed over a fixed **22-bar window**, not unbounded history.
 
@@ -178,7 +178,7 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 EMA(period) = SMA(first period bars) then α×price + (1−α)×prev_ema  where  α = 2/(period+1)
 ADX(14)     = Wilder-smoothed DX over 14 bars; DX = |+DI − −DI| / (+DI + −DI) × 100
 slope       = OLS regression coefficient of close prices over the last 22 bars
-gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.02% to fire)
+gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.05% to fire)
 ```
 
 **`check_exit()`:** Always returns `None` — momentum exits are handled entirely by `evaluate_position()` (trailing stop, take profit, hard stop).
@@ -355,7 +355,9 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 
 `BACKTEST_MODE=true` is set automatically at startup.
 
-### 6.4 Actual baseline results (Jan–May 2026, M1, 1.1M bars, gap=0.02%)
+### 6.4 Actual baseline results (Jan–May 2026, M1, 1.1M bars, gap=0.02% — pre-filter-update)
+
+> **Note:** These results were captured with `_MIN_EMA_GAP_PCT = 0.02%`. The default is now **0.05%** (research-validated minimum to clear fixed spread costs). Re-run the full matrix after updating the DB to get current figures. Expect fewer momentum trades but better signal quality.
 
 Run time: **~18 seconds** for the full 11-instrument × 2-strategy matrix (O(n) incremental EMA).
 
@@ -404,8 +406,8 @@ The optimal gap threshold was found by sweeping 0.0%–1.5% (see `backtest/tune_
 | Gap% | Instruments w/trades | Total trades | Avg sig/wk | Avg stop% | Avg PF |
 |------|---------------------|-------------|-----------|----------|--------|
 | 0.00% | 11 | 3465 | 24.69 | 98.1% | 0.848 |
-| **0.02%** | **11** | **528** | **3.75** | **90.3%** | **0.854** |
-| 0.05% | 9 | 88 | 0.70 | 99.8% | 0.830 |
+| 0.02% | 11 | 528 | 3.75 | 90.3% | 0.854 |
+| **0.05%** | **9** | **88** | **0.70** | **99.8%** | **0.830** |
 | 0.10% | 5 | 25 | 0.34 | 100.0% | 0.697 |
 | 0.20%+ | ≤1 | ≤2 | — | — | — |
 
@@ -627,7 +629,7 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
 | AvgR negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
-| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, default 0.02%, tuned range 0.01–0.05%) |
+| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, default 0.05%, tuned range 0.01–0.10%) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |
