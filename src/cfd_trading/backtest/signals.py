@@ -13,8 +13,9 @@ each new bar in O(1) time.  Create a fresh instance per instrument/strategy run.
                              + check_exit(): hold cap (max_hold_bars) then z-score midline
                              + notify_entry/notify_exit for hold-cap bar counting
   ORBSignalState           — Opening Range Breakout on aggregated bars (designed for M15)
-                             First bar of each session defines OR high/low
+                             First `or_bars` bars (default 2 = 30 min) define OR high/low
                              Break above OR high → LONG; break below OR low → SHORT
+                             Stop at OR low (LONG) / OR high (SHORT) via get_entry_levels()
                              One signal per session; resets on each new session open
                              check_exit() → None; notify_entry/notify_exit are no-ops
 
@@ -367,14 +368,15 @@ class MeanReversionSignalState:
 class ORBSignalState:
     """Opening Range Breakout signal — designed for M15 aggregated bars.
 
-    The first bar of each session (identified by UTC timestamp alignment)
-    defines the Opening Range: its high and low are the reference levels.
-    Subsequent bars in the same session fire LONG when bar.high > OR high,
-    SHORT when bar.low < OR low.  At most one signal is fired per session.
+    The first `or_bars` bars of each session define the Opening Range (default: 2
+    bars = 30 min).  Break above OR high → LONG; break below OR low → SHORT.
+    At most one signal per session; resets automatically at each new session open.
 
-    session_open_hour / session_open_minute (UTC): identify the OR bar by
+    Stop and TP levels are OR-width-based (call get_entry_levels after a signal).
+    The engine calls get_entry_levels in preference to the config default_pct.
+
+    session_open_hour / session_open_minute (UTC): identify the first OR bar by
     checking bar.ts % 86400 == session_open_hour * 3600 + session_open_minute * 60.
-
     DST is not accounted for — see backtest/sessions.py for the caveat.
     """
 
@@ -382,31 +384,47 @@ class ORBSignalState:
         self,
         session_open_hour: int = 8,
         session_open_minute: int = 0,
+        or_bars: int = 2,
     ) -> None:
         self._session_open_seconds = session_open_hour * 3600 + session_open_minute * 60
+        self._or_bars = or_bars
         self._or_high: float | None = None
         self._or_low:  float | None = None
-        self._session_day: int | None = None   # floor(ts / 86400) of the active session
+        self._session_day: int | None = None
         self._traded: bool = False
+        self._or_complete: bool = False
+        self._or_collected: int = 0
 
     def update(self, bar: OHLCBar) -> str | None:
         """Consume one bar; return 'LONG', 'SHORT', or None."""
         day = bar.ts // 86400
-        seconds_in_day = bar.ts % 86400
+        sod = bar.ts % 86400
 
-        if seconds_in_day == self._session_open_seconds:
-            # Opening range bar — record range, reset for this session
-            self._or_high    = bar.high
-            self._or_low     = bar.low
+        # Session open bar — begin OR collection
+        if sod == self._session_open_seconds:
+            self._or_high     = bar.high
+            self._or_low      = bar.low
             self._session_day = day
             self._traded      = False
-            return None  # OR bar is reference only, never an entry
+            self._or_collected = 1
+            self._or_complete  = self._or_bars <= 1
+            return None
 
-        if (
-            self._or_high is not None
-            and not self._traded
-            and self._session_day == day
-        ):
+        # Extend OR during collection phase
+        if (not self._or_complete
+                and self._or_high is not None
+                and self._session_day == day):
+            self._or_high = max(self._or_high, bar.high)
+            self._or_low  = min(self._or_low,  bar.low)
+            self._or_collected += 1
+            if self._or_collected >= self._or_bars:
+                self._or_complete = True
+            return None
+
+        # Breakout detection
+        if (self._or_complete
+                and not self._traded
+                and self._session_day == day):
             if bar.high > self._or_high:
                 self._traded = True
                 return "LONG"
@@ -415,6 +433,19 @@ class ORBSignalState:
                 return "SHORT"
 
         return None
+
+    def get_entry_levels(
+        self, direction: str, fill_price: float, rr_ratio: float
+    ) -> tuple[float, float]:
+        """Return (stop_level, profit_level) using OR boundaries as natural risk reference.
+
+        Stop sits at the opposite OR boundary (OR low for LONG, OR high for SHORT).
+        TP = entry ± OR_width × rr_ratio.
+        """
+        or_width = self._or_high - self._or_low
+        if direction == "BUY":
+            return round(self._or_low, 5), round(fill_price + or_width * rr_ratio, 5)
+        return round(self._or_high, 5), round(fill_price - or_width * rr_ratio, 5)
 
     def check_exit(self) -> str | None:
         return None

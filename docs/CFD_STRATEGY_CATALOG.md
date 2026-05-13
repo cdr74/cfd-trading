@@ -431,24 +431,27 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 **Research basis:** Zarattini & Aziz (2024) — Sharpe > 1.5 on US equity index futures at 15-min resolution. Structural edge: the first bar of the session captures order flow imbalance at the open; the breakout direction predicts session continuation.
 
-**Algorithm:**
+**Algorithm (current: 2-bar OR, OR-width-based stop):**
 
 ```
-1. Identify the Opening Range bar: the first M15 bar whose UTC timestamp
-   aligns with the instrument's session open (see backtest/sessions.py)
-2. Record OR high = bar.high, OR low = bar.low
+1. Collect the Opening Range over the first `or_bars` M15 bars of each session
+   (default: 2 bars = 30 min). First OR bar identified by UTC timestamp alignment.
+2. OR high = max(bar.high) over collection bars
+   OR low  = min(bar.low)  over collection bars
 3. For each subsequent M15 bar in the same session:
      if bar.high > OR high → LONG (break above range)
      if bar.low  < OR low  → SHORT (break below range)
 4. At most one signal per session — first breakout direction wins
-5. Reset OR on the next session open bar
+5. Stop: OR low (LONG) / OR high (SHORT) — natural invalidation at OR boundary
+   TP:   entry ± OR_width × rr_ratio (rr_ratio = 2.0)
+6. Reset OR on the next session open bar
 ```
 
 **Key design choices:**
-- One signal per session: prevents chasing reversals after the first impulse
-- Strict inequality: touching OR level is not a breakout; requires `bar.high > OR high`
-- Percentage stop (0.5% default): approximates the OR-width stop used in practice. Production would use `stop = OR low` for LONG, `stop = OR high` for SHORT.
-- min_rr_ratio = 2.0: higher than momentum (1.5) — ORB targets session continuation, not micro-moves
+- **2-bar OR (30 min):** more robust than 1-bar; price has two bars to establish genuine support/resistance rather than a single noisy open candle. Matches the 30-min OR in the Zarattini & Aziz research setup.
+- **OR-width-based stop:** stop at opposite OR boundary is the natural invalidation level. Tighter stop for narrow ranges (fewer false breakout losses), wider for wide ranges (respects the actual range). Implemented via `get_entry_levels()` on `ORBSignalState`.
+- **Strict inequality:** touching OR level is not a breakout; requires `bar.high > OR high`
+- **min_rr_ratio = 2.0:** TP = entry ± OR_width × 2. ORB targets session continuation; higher R:R than momentum (1.5).
 
 **Session open times (UTC) — `backtest/sessions.py`:**
 
@@ -478,7 +481,8 @@ Tracks all signal and parameter changes in chronological order so we can see wha
 | 2026-05-13 | Added ATR≥4×spread gate + 5-bar hold cap + spread fill costs (mean rev) | M1 | Mean rev DE40 PF 1.10 (194 trades), most instruments PF < 1.0; signal count 2940 DE40 → too high | Spread costs expose that mean rev edge is near zero at M1. Hold cap and ATR gate not sufficient alone |
 | 2026-05-13 | Added M30 directional bias gate (30-bar OLS slope on M1 bars, momentum only) | M1 | Momentum signals: near zero across all instruments | M30 gate on M1 data is self-defeating — crossovers happen at reversals when M30 slope still reflects prior direction. Gate disabled in `run.py`. Needs true M30 bar data to be useful |
 | 2026-05-13 | M1 → M15 aggregation (in-process); M30 gate disabled | M15 | Mean rev: best PF 1.10 DE40, most < 1.0. Momentum: near-zero signals — EMA9/21 warm-up is 22 bars = 5.5 hours at M15 | EMA9/21 wrong for M15 (too slow). Mean rev marginally better but no real edge. Resolution change alone insufficient |
-| 2026-05-13 | ORB (Opening Range Breakout) on M15 — first session bar defines range | M15 | *see §6.6 in BACKTESTING.md* | *pending* |
+| 2026-05-13 | ORB v1 — 1-bar OR, fixed 0.5% stop, 2:1 R:R | M15 | Stop rate 88–97%; all instruments PF < 1.1; best: EURUSD 1.09, USDJPY 1.16 | Single-bar OR is noisy; false breakouts dominate; fixed stop unrelated to OR width |
+| 2026-05-13 | ORB v2 — 2-bar OR (30 min), OR-width stop (stop=OR low/high), 2:1 R:R | M15 | Stop rate reduced to 63–94%; DE40 PF 1.62, UK100 PF 1.19, USDJPY PF 1.27, US500 PF 1.03 | Clear equity index + USDJPY edge. FX pairs, crypto, commodities remain unprofitable |
 
 ---
 

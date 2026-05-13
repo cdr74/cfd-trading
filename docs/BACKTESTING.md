@@ -457,9 +457,9 @@ ETHUSD    momentum        5       40.0%   0.18    1.998    100.0%  0.5      -0.2
 
 *Conclusion — neither strategy is profitable at M15 as currently parameterised. The resolution change alone is not sufficient.*
 
-### 6.6 ORB results (Jan–May 2026, M15, stop=0.5%, TP=2×stop)
+### 6.6 ORB v1 results (Jan–May 2026, M15, 1-bar OR, fixed stop=0.5%)
 
-Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
+Initial ORB run: single 15-min opening bar defines the range; fixed 0.5% stop; 2:1 R:R.
 
 ```
 Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
@@ -477,16 +477,37 @@ BTCUSD    orb             71      25.4%   0.34    17.419   97.2%   7.03     -0.4
 ETHUSD    orb             71      29.6%   0.59    12.499   91.5%   7.03     -0.25R
 ```
 
-**Reading the ORB results:**
+Key finding: stop rate 88–97% — false breakouts dominate. Single-bar OR is noisy; fixed stop not aligned with natural invalidation level.
 
-- **Signal frequency correct** — 3.65–4.93 sig/wk maps to roughly 1 signal per trading session, which is exactly what ORB should produce. Session detection is working.
-- **Stop rate 88–97%** — almost every trade exits via hard stop, not take profit. The ORB breakout is being reversed before price reaches the 1.0% TP target.
-- **Win rates 25–40%** — with a 2:1 R:R the breakeven win rate is 33.3%. Only EURUSD (35.3%) and USDJPY (29.1%) are marginally positive PF; the latter shows PF > 1 despite low win rate because trailing stop captures occasional large winners.
-- **US indices are the best performers** — US500 (40.3% win), UK100 (38.6% win) — consistent with Zarattini & Aziz whose research specifically covers US equity index futures. Still not profitable here.
-- **Crypto and commodities are worst** — BTCUSD 25.4% / PF 0.34; XBRUSD 26.7% / PF 0.49. High spread relative to OR width eats entries.
+### 6.7 ORB v2 results (Jan–May 2026, M15, 2-bar OR, OR-width-based stop, 2:1 R:R)
 
-**Diagnostic — why stop rate is so high:**
-At M15, the OR is a single 15-min bar. One 15-min bar at DE40 might span 20–50 pts. A LONG breakout entry occurs at the OR high; with a 0.5% stop (≈ 90 pts on DE40 at 18,000), the stop is wide relative to the OR, but the TP at 1.0% (≈ 180 pts) requires a sustained session trend that does not consistently materialise from a single-bar OR. False breakouts — where price breaks above the OR high briefly before reversing — dominate the loss distribution.
+Improvements: (a) OR defined over first 2 M15 bars (30 min); (b) stop placed at OR low/high (natural invalidation); (c) TP = entry ± OR_width × 2.
+
+Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
+
+```
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
+--------  --------------  ------  ------  ------  -------  ------  -------  -------
+EURUSD    orb             68      30.9%   0.80    1.528    69.1%   4.86     -0.33R
+GBPUSD    orb             69      26.1%   0.54    4.001    73.9%   4.93     -0.34R
+USDJPY    orb             68      36.8%   1.27    1.869    63.2%   4.86     +0.10R
+EURGBP    orb             62      27.4%   0.44    3.023    74.2%   4.42     -0.37R
+US500     orb             67      40.3%   1.03    4.167    88.1%   4.64     -0.12R
+DE40      orb             71      39.4%   1.62    2.326    85.9%   4.91     +0.11R
+UK100     orb             69      42.0%   1.19    4.421    84.1%   4.77     +0.09R
+GOLD      orb             72      31.9%   0.83    4.006    91.7%   4.86     -0.34R
+XBRUSD    orb             74      32.4%   1.06    9.189    94.6%   4.76     -0.31R
+BTCUSD    orb             71      31.0%   0.52    12.934   90.1%   7.03     -0.36R
+ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.38R
+```
+
+**Reading the ORB v2 results:**
+
+- **Stop rate reduced significantly** — 63–94% vs 88–97% previously. The 30-min OR gives price more room to form a genuine range, reducing immediate false-breakout reversals.
+- **Equity indices and USDJPY now profitable** — DE40 PF 1.62 (+0.11R), UK100 PF 1.19 (+0.09R), USDJPY PF 1.27 (+0.10R). US500 borderline (PF 1.03). These four instruments show a genuine ORB edge.
+- **AvgR is negative despite positive PF for some instruments** — OR-width-based stops mean the risk amount varies per trade. Spread costs are large relative to OR width on thin false-breakout stops, compressing the per-trade R. The PF calculation is a more reliable signal than AvgR here.
+- **FX pairs (except USDJPY), crypto, and commodities remain unprofitable** — EURUSD/GBPUSD/EURGBP PF 0.44–0.80; BTCUSD PF 0.52. Wide spreads relative to typical OR width erode edge on instruments where the ORB structural advantage is weaker.
+- **XBRUSD borderline** — PF 1.06 but MaxDD 9.2%; not reliable.
 
 ---
 
@@ -598,7 +619,34 @@ Tests for `backtest/engine.py`:
 | `TestAggregateOHLC` | Single-group OHLC: 15 bars → 1 M15 bar; open=first, high=max, low=min, close=last, volume=sum; resolution label; ts=first bar; epic preserved |
 | `TestAggregateMultipleGroups` | 30 bars → 2 groups; correct group boundary timestamps; partial end-group included; M5 label correct |
 
-### 7.4 `tests/unit/test_run.py` (13 tests)
+### 7.4c `tests/unit/test_sessions.py` (8 tests)
+
+Tests for `backtest/sessions.py`:
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_us500_nyse_open` | US500 → (14, 30) |
+| `test_de40_xetra_open` | DE40 → (8, 0) |
+| `test_uk100_lse_open` | UK100 → (8, 0) |
+| `test_fx_london_open` | EURUSD/GBPUSD/USDJPY/EURGBP → (8, 0) |
+| `test_commodities_london_open` | GOLD / XBRUSD → (8, 0) |
+| `test_crypto_midnight_utc` | BTCUSD / ETHUSD → (0, 0) |
+| `test_unknown_epic_defaults_to_london_open` | Unknown epics → (8, 0) |
+| `test_returns_tuple_of_two_ints` | Return type is `tuple[int, int]` |
+
+### 7.4d `tests/unit/test_orb.py` (23 tests)
+
+Tests for `ORBSignalState` in `backtest/signals.py`:
+
+| Test class | What it verifies |
+|---|---|
+| `TestORBBasic` | No signal on OR bars (both); no signal before session open; within-range bar returns None; LONG/SHORT breakout fires; strict inequality (touching OR high/low is not a breakout) |
+| `TestORBMultiBarOR` | OR extends to wider second bar; `or_bars=1` reproduces original single-bar behaviour; no signal during collection even if bar breaks first bar's range; `or_bars=3` blocks entry for first 2 bars after open |
+| `TestORBSessionReset` | One signal per session (second breakout in same session suppressed); reset on new session open; no crossover from previous session's OR; first signal wins (LONG, then SHORT-side move ignored) |
+| `TestORBEntryLevels` | LONG stop at OR low; SHORT stop at OR high; TP = entry ± OR_width × rr_ratio; levels reflect extended OR when second collection bar widened the range |
+| `TestORBInterface` | `check_exit()` always None; `notify_entry/exit` are no-ops; custom session time (14:30 UTC) with 2-bar OR fires at correct bar |
+
+### 7.4e `tests/unit/test_run.py` (13 tests)
 
 Tests for `backtest/run.py`:
 
@@ -626,11 +674,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (253 tests)
+# Full unit suite (284 tests)
 pytest tests/unit/ -v
 ```
 
-All 253 unit tests pass with no network access or real DB file.
+All 284 unit tests pass with no network access or real DB file.
 
 ---
 

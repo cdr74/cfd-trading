@@ -32,6 +32,7 @@ class Trade:
     exit_price: float | None = None
     exit_reason: str | None = None
     pnl_points: float | None = None
+    risk_pts: float | None = None   # actual stop distance in price units; used for per-trade AvgR
 
 
 @dataclass
@@ -140,15 +141,22 @@ def run_backtest(
                 next_bar = bars[i + 1]
                 direction = "BUY" if signal == "LONG" else "SELL"
                 fill_price = _entry_fill(direction, next_bar.open, half)
-                stop_distance = fill_price * stop_pct
 
-                if direction == "BUY":
-                    stop_level = round(fill_price - stop_distance, 5)
-                    profit_level = round(fill_price + stop_distance * rr_ratio, 5)
+                # Use OR-width-based levels when the signal state provides them
+                if hasattr(signal_state, "get_entry_levels"):
+                    stop_level, profit_level = signal_state.get_entry_levels(
+                        direction, fill_price, rr_ratio
+                    )
                 else:
-                    stop_level = round(fill_price + stop_distance, 5)
-                    profit_level = round(fill_price - stop_distance * rr_ratio, 5)
+                    stop_distance = fill_price * stop_pct
+                    if direction == "BUY":
+                        stop_level = round(fill_price - stop_distance, 5)
+                        profit_level = round(fill_price + stop_distance * rr_ratio, 5)
+                    else:
+                        stop_level = round(fill_price + stop_distance, 5)
+                        profit_level = round(fill_price - stop_distance * rr_ratio, 5)
 
+                risk_pts = abs(fill_price - stop_level)
                 open_trade = Trade(
                     epic=epic,
                     strategy=strategy,
@@ -157,6 +165,7 @@ def run_backtest(
                     entry_price=fill_price,
                     stop_loss=stop_level,
                     take_profit=profit_level,
+                    risk_pts=risk_pts,
                 )
                 current_stop = stop_level
                 signal_state.notify_entry()
@@ -234,9 +243,13 @@ def _summarise(
 
     net_pnl_pts = round(sum(t.pnl_points or 0 for t in trades), 4)
 
-    # AvgR: average P&L per trade expressed as a multiple of the risk taken (1R = stop distance)
-    r_per_trade = avg_entry * stop_pct
-    avg_r = round(net_pnl_pts / (n * r_per_trade), 4) if (n > 0 and r_per_trade > 0) else 0.0
+    # AvgR: average P&L per trade in R-multiples.
+    # Use per-trade risk_pts when available (e.g. OR-width-based stops); fall back to config %.
+    if all(t.risk_pts is not None and t.risk_pts > 0 for t in trades):
+        avg_r = round(sum((t.pnl_points or 0) / t.risk_pts for t in trades) / n, 4)
+    else:
+        r_per_trade = avg_entry * stop_pct
+        avg_r = round(net_pnl_pts / (n * r_per_trade), 4) if r_per_trade > 0 else 0.0
 
     return BacktestResult(
         epic=epic,
