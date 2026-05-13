@@ -24,6 +24,7 @@ from cfd_trading.storage.db import get_connection
 from cfd_trading.storage.repository import get_bars
 from cfd_trading.strategy.loader import load_strategy, list_strategies
 from cfd_trading.backtest.engine import run_backtest, BacktestResult
+from cfd_trading.backtest.spreads import spread_points
 
 _DEFAULT_DB_PATH = "/mnt/c/Users/chris/dev/trading-data/trading.db"
 _CONFIG_DIR = Path(os.getenv("CONFIG_DIR", str(Path(__file__).parents[3] / "config")))
@@ -53,7 +54,9 @@ def main() -> None:
             if not bars:
                 print(f"  [skip] {epic}/{strategy_name} — no bars in DB for resolution {args.resolution}")
                 continue
-            result = run_backtest(epic, strategy_name, bars, strat.config, risk_config)
+            sp = spread_points(epic, bars[0].close) if bars else 0.0
+            result = run_backtest(epic, strategy_name, bars, strat.config, risk_config,
+                                  spread_pts=sp)
             results.append(result)
 
     conn.close()

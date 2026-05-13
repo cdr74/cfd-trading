@@ -5,9 +5,12 @@ each new bar in O(1) time.  Create a fresh instance per instrument/strategy run.
 
   MomentumSignalState    — incremental EMA9/EMA21 crossover + gap filter + slope
                            + ADX(14) regime gate (suppressed when ADX < threshold)
+                           + notify_entry/notify_exit (no-ops; satisfy shared interface)
   MeanReversionSignalState — rolling 20-bar z-score threshold
                              + ADX(14) regime gate (suppressed when ADX >= threshold)
-                             + check_exit() midline close when z returns inside ±0.5
+                             + ATR(14) ≥ 4× spread gate (skips low-vol entries)
+                             + check_exit(): hold cap (max_hold_bars) then z-score midline
+                             + notify_entry/notify_exit for hold-cap bar counting
 
 The functional wrappers (momentum_signal, mean_reversion_signal) are kept as
 conveniences for unit tests.  The backtest engine uses the stateful classes
@@ -118,6 +121,18 @@ class _ADXState:
         self._adx = (self._adx * (self._period - 1) + dx) / self._period
         return self._adx
 
+    @property
+    def atr(self) -> float | None:
+        """Standard Wilder ATR in price units, or None while warming up.
+
+        Internally _atr stores the Wilder-smoothed sum (= period × standard ATR)
+        so the smoothing update formula is additive rather than multiplicative.
+        Dividing by period here restores the conventional per-bar ATR value.
+        """
+        if self._atr is None:
+            return None
+        return self._atr / self._period
+
 
 # ---------------------------------------------------------------------------
 # Stateful signal classes — used by the backtest engine
@@ -219,6 +234,12 @@ class MomentumSignalState:
         """
         return None
 
+    def notify_entry(self) -> None:
+        pass
+
+    def notify_exit(self) -> None:
+        pass
+
 
 class MeanReversionSignalState:
     """O(1)-per-bar z-score mean reversion signal.
@@ -229,9 +250,16 @@ class MeanReversionSignalState:
     market — mean reversion logic breaks down).  During ADX warm-up the gate
     is permissive.
 
-    check_exit() returns 'Z-score midline' when the z-score of the current bar
-    falls inside ±zscore_exit_threshold (default ±0.5), indicating the expected
-    reversion has occurred and the position should be closed.
+    ATR viability gate: signal is suppressed when ATR(14) < 4 × spread_pts
+    (volatility too low relative to fixed spread cost to produce positive
+    expectancy).  Disabled when spread_pts=0.0 (default).
+
+    check_exit() priority:
+      1. Hold cap  — fires after max_hold_bars bars in trade (default 5)
+      2. Z-score midline — fires when |z| ≤ zscore_exit_threshold (default 0.5)
+
+    notify_entry() / notify_exit() are called by the engine to synchronise the
+    hold-cap bar counter with actual position state.
     """
 
     _WINDOW = 20
@@ -241,17 +269,26 @@ class MeanReversionSignalState:
         adx_period: int = 14,
         adx_threshold: float = 25.0,
         zscore_exit_threshold: float = 0.5,
+        spread_pts: float = 0.0,
+        max_hold_bars: int = 5,
     ) -> None:
         self._adx_threshold         = adx_threshold
         self._zscore_exit_threshold = zscore_exit_threshold
+        self._spread_pts            = spread_pts
+        self._max_hold_bars         = max_hold_bars
         self._buf: deque[float] = deque(maxlen=self._WINDOW)
         self._adx_state = _ADXState(adx_period)
         self._last_z: float | None = None
+        self._bars_in_trade: int | None = None  # None = no open position
 
     def update(self, bar: OHLCBar) -> str | None:
         """Consume one bar; return 'LONG', 'SHORT', or None."""
         self._buf.append(bar.close)
         adx = self._adx_state.update(bar)
+        atr = self._adx_state.atr
+
+        if self._bars_in_trade is not None:
+            self._bars_in_trade += 1
 
         if len(self._buf) < self._WINDOW:
             self._last_z = None
@@ -261,6 +298,11 @@ class MeanReversionSignalState:
         self._last_z = z
 
         if z is None:
+            return None
+
+        # ATR viability gate — only feasible when volatility >> spread cost
+        # Permissive while ATR is warming up (first ~14 bars)
+        if self._spread_pts > 0 and atr is not None and atr < 4.0 * self._spread_pts:
             return None
 
         # ADX regime gate — require a non-trending market; pass when ADX not yet warmed up
@@ -274,12 +316,25 @@ class MeanReversionSignalState:
         return None
 
     def check_exit(self) -> str | None:
-        """Return 'Z-score midline' when z has reverted inside ±zscore_exit_threshold."""
-        if self._last_z is None:
-            return None
-        if abs(self._last_z) <= self._zscore_exit_threshold:
+        """Return an exit reason if the position should close based on indicator state.
+
+        Priority: hold cap before z-score midline.
+        Hard stop and take profit (evaluated by evaluate_position) take priority
+        over both — they are checked before check_exit() is called by the engine.
+        """
+        if self._bars_in_trade is not None and self._bars_in_trade >= self._max_hold_bars:
+            return "Hold cap"
+        if self._last_z is not None and abs(self._last_z) <= self._zscore_exit_threshold:
             return "Z-score midline"
         return None
+
+    def notify_entry(self) -> None:
+        """Called by the engine immediately after a trade is opened."""
+        self._bars_in_trade = 0
+
+    def notify_exit(self) -> None:
+        """Called by the engine immediately after a trade is closed."""
+        self._bars_in_trade = None
 
 
 # ---------------------------------------------------------------------------

@@ -286,11 +286,49 @@ class TestMetrics:
         # After 16 bars of 1.5 accumulate in the 20-bar window the mean rises to 1.4
         # and z drops to 0.5 → check_exit fires "Z-score midline".
         # window at bar 34: [1.0]*4 + [1.5]*16, mean=1.4, sigma=0.2, z=0.5
+        # max_hold_bars raised to 50 so the hold cap does not fire before the midline.
         bars = _bars([1.0] * 19 + [1.5] * 17)   # 36 bars; midline fires at bar 34
+
+        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG,
+                              signal_kwargs={"max_hold_bars": 50})
+        assert result.total_trades == 1
+        assert result.trades[0].exit_reason == "Z-score midline"
+
+    def test_hold_cap_closes_mean_reversion_trade(self, mean_rev_cfg):
+        # SHORT at bar 19 (spike to 1.5). Entry at bar 20. Price stays at 1.5.
+        # Default max_hold_bars=5: hold cap fires after bars 20–24 (5 bars in trade).
+        bars = _bars([1.0] * 19 + [1.5] * 10)
 
         result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
         assert result.total_trades == 1
-        assert result.trades[0].exit_reason == "Z-score midline"
+        assert result.trades[0].exit_reason == "Hold cap"
+
+    def test_spread_adjusts_buy_entry_and_exit(self, momentum_cfg):
+        # BUY at next_bar.open=1.10 with spread_pts=0.10:
+        #   entry fill = 1.10 + 0.05 = 1.15
+        #   exit fill  = close - 0.05
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        flat_bar = _bar(23 * 60, 1.10)
+        bars = signal_bars + [entry_bar, flat_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        trade = result.trades[0]
+        assert trade.entry_price == pytest.approx(1.15, rel=1e-6)
+        assert trade.exit_price  == pytest.approx(1.10 - 0.05, rel=1e-6)
+
+    def test_spread_adjusts_sell_entry_and_exit(self, momentum_cfg):
+        # SELL at next_bar.open=0.90 with spread_pts=0.10:
+        #   entry fill = 0.90 - 0.05 = 0.85
+        #   exit fill  = close + 0.05
+        bars = _bars([1.0] * 21 + [0.90, 0.90])
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        trade = result.trades[0]
+        assert trade.entry_price == pytest.approx(0.85, rel=1e-6)
+        assert trade.exit_price  == pytest.approx(0.90 + 0.05, rel=1e-6)
 
     def test_hard_stop_takes_priority_over_midline_exit(self, mean_rev_cfg):
         # Hard stop fires before check_exit is reached (open_trade is set to None first)

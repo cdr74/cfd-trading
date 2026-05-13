@@ -56,6 +56,7 @@ def run_backtest(
     strategy_config: dict,
     risk_config: dict,
     signal_kwargs: dict | None = None,
+    spread_pts: float = 0.0,
 ) -> BacktestResult:
     """Walk bars chronologically; fire entry signals; manage exits with evaluate_position.
 
@@ -64,13 +65,22 @@ def run_backtest(
                       kept for future preflight integration)
     signal_kwargs   — optional keyword args forwarded to the signal state constructor
                       (e.g. {"min_ema_gap_pct": 0.002} for tuning the momentum filter)
+    spread_pts      — typical spread in price units for this instrument; used to
+                      adjust entry/exit fill prices (buy at ask = mid + spread/2,
+                      sell at bid = mid - spread/2) and passed to MeanReversionSignalState
+                      for the ATR viability gate
     """
     if strategy not in _SIGNAL_STATES:
         raise ValueError(f"Unknown strategy '{strategy}'. Available: {list(_SIGNAL_STATES)}")
 
-    signal_state = _SIGNAL_STATES[strategy](**(signal_kwargs or {}))
+    kwargs = dict(signal_kwargs or {})
+    if strategy == "mean_reversion":
+        kwargs.setdefault("spread_pts", spread_pts)
+    signal_state = _SIGNAL_STATES[strategy](**kwargs)
+
     stop_pct = strategy_config["risk"]["stop_loss"]["default_pct"] / 100
     rr_ratio = strategy_config["risk"]["take_profit"]["min_rr_ratio"]
+    half = spread_pts / 2
 
     completed: list[Trade] = []
     open_trade: Trade | None = None
@@ -82,7 +92,10 @@ def run_backtest(
 
         if open_trade is not None:
             # --- Manage open position ---
-            price_data = {"bid": bar.close, "offer": bar.close}
+            price_data = {
+                "bid": bar.close - half,
+                "offer": bar.close + half,
+            }
             position_dict = {
                 "direction": open_trade.direction,
                 "stopLevel": current_stop,
@@ -93,13 +106,15 @@ def run_backtest(
             )
 
             if action == "CLOSE":
+                exit_fill = _exit_fill(open_trade.direction, bar.close, half)
                 open_trade.exit_ts = bar.ts
-                open_trade.exit_price = bar.close
+                open_trade.exit_price = exit_fill
                 open_trade.exit_reason = reason
-                open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, bar.close)
+                open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
                 completed.append(open_trade)
                 open_trade = None
                 current_stop = None
+                signal_state.notify_exit()
 
             elif action == "ADJUST" and new_stop is not None:
                 current_stop = new_stop
@@ -108,48 +123,53 @@ def run_backtest(
             if open_trade is not None:
                 exit_reason = signal_state.check_exit()
                 if exit_reason:
+                    exit_fill = _exit_fill(open_trade.direction, bar.close, half)
                     open_trade.exit_ts = bar.ts
-                    open_trade.exit_price = bar.close
+                    open_trade.exit_price = exit_fill
                     open_trade.exit_reason = exit_reason
-                    open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, bar.close)
+                    open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
                     completed.append(open_trade)
                     open_trade = None
                     current_stop = None
+                    signal_state.notify_exit()
 
         else:
             # --- Check entry signal ---
             if signal is not None and i + 1 < len(bars):
                 next_bar = bars[i + 1]
-                entry_price = next_bar.open
                 direction = "BUY" if signal == "LONG" else "SELL"
-                stop_distance = entry_price * stop_pct
+                fill_price = _entry_fill(direction, next_bar.open, half)
+                stop_distance = fill_price * stop_pct
 
                 if direction == "BUY":
-                    stop_level = round(entry_price - stop_distance, 5)
-                    profit_level = round(entry_price + stop_distance * rr_ratio, 5)
+                    stop_level = round(fill_price - stop_distance, 5)
+                    profit_level = round(fill_price + stop_distance * rr_ratio, 5)
                 else:
-                    stop_level = round(entry_price + stop_distance, 5)
-                    profit_level = round(entry_price - stop_distance * rr_ratio, 5)
+                    stop_level = round(fill_price + stop_distance, 5)
+                    profit_level = round(fill_price - stop_distance * rr_ratio, 5)
 
                 open_trade = Trade(
                     epic=epic,
                     strategy=strategy,
                     direction=direction,
                     entry_ts=next_bar.ts,
-                    entry_price=entry_price,
+                    entry_price=fill_price,
                     stop_loss=stop_level,
                     take_profit=profit_level,
                 )
                 current_stop = stop_level
+                signal_state.notify_entry()
 
     # Close any position still open at end of data
     if open_trade is not None and bars:
         last = bars[-1]
+        exit_fill = _exit_fill(open_trade.direction, last.close, half)
         open_trade.exit_ts = last.ts
-        open_trade.exit_price = last.close
+        open_trade.exit_price = exit_fill
         open_trade.exit_reason = "End of data"
-        open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, last.close)
+        open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
         completed.append(open_trade)
+        signal_state.notify_exit()
 
     return _summarise(epic, strategy, completed, bars, stop_pct)
 
@@ -157,6 +177,16 @@ def run_backtest(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def _entry_fill(direction: str, bar_open: float, half_spread: float) -> float:
+    """Fill price at entry: BUY at ask (open + half), SELL at bid (open - half)."""
+    return bar_open + half_spread if direction == "BUY" else bar_open - half_spread
+
+
+def _exit_fill(direction: str, bar_close: float, half_spread: float) -> float:
+    """Fill price at exit: closing BUY sells at bid (close - half), closing SELL buys at ask."""
+    return bar_close - half_spread if direction == "BUY" else bar_close + half_spread
+
 
 def _pnl(direction: str, entry: float, exit_price: float) -> float:
     return round(exit_price - entry if direction == "BUY" else entry - exit_price, 6)

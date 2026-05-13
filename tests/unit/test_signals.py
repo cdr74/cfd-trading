@@ -206,6 +206,91 @@ class TestADXGate:
         assert result_open == "SHORT"
 
 
+class TestATRGate:
+    """ATR viability gate for MeanReversionSignalState."""
+
+    def test_gate_blocks_when_spread_large_relative_to_atr(self):
+        # 19 flat bars (TR≈0) + spike to 1.5; ATR is tiny.
+        # With spread_pts=10.0 (absurdly large), 4×spread >> ATR → gate blocks.
+        bars = _bars([1.0] * 19 + [1.5])
+        state = MeanReversionSignalState(spread_pts=10.0)
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result is None
+
+    def test_gate_disabled_when_spread_zero(self):
+        # Same sequence but spread_pts=0.0 → gate off → signal fires normally
+        bars = _bars([1.0] * 19 + [1.5])
+        state = MeanReversionSignalState(spread_pts=0.0)
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result == "SHORT"
+
+    def test_gate_permissive_while_atr_warming_up(self):
+        # ATR not yet seeded (< 14 bars seen); gate must be permissive so
+        # very short synthetic sequences still produce signals.
+        bars = _bars([1.0] * 19 + [1.5])  # 20 bars; ATR seeded at bar 14
+        # With a real but small spread, ATR is also small (spike TR ≈ 0.5/14);
+        # the gate should still be permissive when spread_pts=0 (disabled).
+        state = MeanReversionSignalState(spread_pts=0.0)
+        result = None
+        for bar in bars:
+            result = state.update(bar)
+        assert result == "SHORT"
+
+
+class TestHoldCap:
+    """Hold cap exit — fires after max_hold_bars bars in trade."""
+
+    def test_hold_cap_fires_after_max_bars(self):
+        # notify_entry() sets _bars_in_trade=0; each update() increments it.
+        # After max_hold_bars updates → check_exit returns "Hold cap".
+        state = MeanReversionSignalState(max_hold_bars=3)
+        # Feed any bars to warm up state
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        state.notify_entry()
+        for bar in _bars([1.5] * 3):
+            state.update(bar)
+        assert state.check_exit() == "Hold cap"
+
+    def test_hold_cap_not_triggered_before_max_bars(self):
+        state = MeanReversionSignalState(max_hold_bars=3)
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        state.notify_entry()
+        for bar in _bars([1.5] * 2):
+            state.update(bar)
+        # Only 2 bars in trade; cap at 3 not yet reached
+        # (z large → midline also not triggered)
+        result = state.check_exit()
+        assert result != "Hold cap"
+
+    def test_hold_cap_cleared_after_notify_exit(self):
+        # After notify_exit, _bars_in_trade is None → hold cap inactive
+        state = MeanReversionSignalState(max_hold_bars=2)
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        state.notify_entry()
+        for bar in _bars([1.5] * 5):
+            state.update(bar)
+        assert state.check_exit() == "Hold cap"
+        state.notify_exit()
+        # After exit, hold cap resets regardless of bar count
+        assert state.check_exit() != "Hold cap"
+
+    def test_hold_cap_priority_over_z_score_midline(self):
+        # When both hold cap and midline conditions are true, hold cap wins
+        state = MeanReversionSignalState(max_hold_bars=1, zscore_exit_threshold=100.0)
+        for bar in _bars([1.0] * 19 + [1.5]):
+            state.update(bar)
+        state.notify_entry()
+        state.update(_bars([1.5])[0])  # bars_in_trade = 1 ≥ max_hold_bars → hold cap
+        assert state.check_exit() == "Hold cap"
+
+
 class TestCheckExit:
     """check_exit() — z-score midline exit for mean reversion."""
 

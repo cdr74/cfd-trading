@@ -266,6 +266,8 @@ See `docs/SYSTEM_DESIGN.md` §3.10 and `docs/BACKTESTING.md` for full design dec
 
 ### 10.7 Backtest signal improvements (research-driven, M1-specific)
 
+*All three steps address cost/edge issues identified by RESEARCH.md (2026-05-12): H ≈ 0.50 at M1, ITSM operates at 30-min scale, 0.02% gap below spread breakeven.*
+
 From `docs/RESEARCH.md` (2026-05-12): At M1 resolution, H ≈ 0.50 (random walk). ITSM operates at 30-min scale.
 These improvements address the three cost/edge issues identified in research.
 
@@ -273,17 +275,12 @@ These improvements address the three cost/edge issues identified in research.
   - `signals.py`: `_MIN_EMA_GAP_PCT = 0.0005` (was 0.0002)
   - Rationale: 0.02% = 1.6 pts at 8,000 — barely above a 1-pt spread. 0.05% = 4 pts = 4× spread (positive signal/cost ratio). See `docs/RESEARCH.md` §Cost and Viability Thresholds.
 
-- [ ] **Step 2 — ATR(14) ≥ 4× spread gate for mean reversion entries**
-  - Mean reversion on M1 is structurally hostile (bid-ask bounce not tradeable). Only viable when volatility is high relative to spread cost.
-  - Blocks new mean reversion entries when `ATR(14) < 4 × spread_pct × price`. Existing 1.5% hard stop unchanged.
-  - **Design questions for next session:**
-    - **Q1 — How to supply spread per instrument?**
-      - (a) Add `spread_pct` per instrument to `risk.yaml` or `watchlist.yaml` (explicit, accurate, requires maintenance)
-      - (b) Hardcode per asset class in `signals.py`: indices ≈ 1pt/8000 ≈ 0.000125; FX ≈ 0.00010; crypto ≈ 0.001 (zero-maintenance but imprecise)
-      - (c) Single configurable global default in `signal_kwargs` (simplest, least accurate)
-    - **Q2 — ATR multiple:** Fix at 4× (research recommendation) or expose as tunable `signal_kwargs` parameter?
-    - **Q3 — Implement 5-bar max hold cap simultaneously?** (Research: exit flat if not moving toward target within 5 bars. Low-risk change, can be bundled.)
-    - **Key constraint:** User explicitly noted not losing stop-loss protection. ATR gate blocks entries only — does NOT affect stop loss, TP, or existing position management.
+- [x] **Step 2 — ATR(14) ≥ 4× spread gate + 5-bar hold cap + spread fill-price costs** (done 2026-05-13)
+  - `backtest/spreads.py`: per-instrument spread lookup table (Capital.com 2026-05 typical values). `spread_points(epic, price)` resolves absolute (FX, indices, commodities) and percentage-based (crypto) spreads.
+  - `signals.py`: `MeanReversionSignalState` gains `spread_pts`, `max_hold_bars` params. ATR gate: `atr < 4 × spread_pts` → skip entry. Hold cap: exit after 5 bars if still in trade. `notify_entry/notify_exit` for bar counting.
+  - `engine.py`: entry fill = `open ± spread/2`, exit fill = `close ∓ spread/2`. `spread_pts` passed to `MeanReversionSignalState`. `notify_entry/notify_exit` called at all open/close paths.
+  - `run.py`: imports `spread_points`, computes per-epic spread from `bars[0].close`, passes to engine.
+  - 18 new unit tests (233 total). `test_spreads.py` (8), `TestATRGate` (3), `TestHoldCap` (4), engine spread/hold cap tests (4 new + 1 updated).
 
 - [ ] **Step 3 — 30-min directional bias signal (ITSM architecture)**
   - M1 EMA crossover used as precise entry trigger; 30-min structure provides directional bias. Block entries that contradict M30 direction.

@@ -203,9 +203,15 @@ gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.05% to fire)
 
 **Key detail — ADX regime gate:** Signal is suppressed when ADX(14) ≥ 25. Mean reversion logic breaks down in trending markets — spreads diverge rather than converge. Set `adx_threshold=float("inf")` to disable. Passes while ADX is warming up.
 
+**Key detail — ATR viability gate:** Signal is suppressed when `ATR(14) < 4 × spread_pts`. At M1 resolution, the dominant negative autocorrelation is bid-ask bounce (Roll 1984), not tradeable mean reversion — the gate enforces minimum volatility to justify the fixed spread cost. Disabled when `spread_pts=0.0` (default). Permissive while ATR is warming up (first ~14 bars).
+
 **Key detail — windowed z-score:** Only the last 20 bars contribute to `mean` and `stddev`. Older history is ignored.
 
-**`check_exit()`:** Returns `"Z-score midline"` when `abs(last_z) <= zscore_exit_threshold` (default **0.5**). Called by the engine on every bar while a mean reversion position is open. Fires when the expected reversion has materialised — z has returned inside ±0.5σ of the rolling mean. Hard stop and take profit in `evaluate_position()` take priority (checked first).
+**`check_exit()` priority:**
+1. **Hold cap** — returns `"Hold cap"` after `max_hold_bars` bars in trade (default **5**). If the position is not moving toward target within 5 bars, it is likely caught in a trend — exit flat.
+2. **Z-score midline** — returns `"Z-score midline"` when `abs(last_z) <= zscore_exit_threshold` (default **0.5**). Fires when the expected reversion has materialised.
+
+Hard stop and take profit in `evaluate_position()` take priority over both (checked before `check_exit()`). The engine calls `notify_entry()` / `notify_exit()` to synchronise the hold-cap bar counter with actual position state.
 
 **Indicator formula:**
 
@@ -245,20 +251,23 @@ for each bar i in chronological order:
 
 ### 5.2 Stop and take profit calculation
 
+Stop and TP are computed from the actual fill price (after spread adjustment):
+
 ```
-stop_distance = entry_price × (default_pct / 100)
+fill_price    = next_bar.open ± spread_pts/2
+stop_distance = fill_price × (default_pct / 100)
 
 BUY:
-  stop_loss    = entry_price - stop_distance
-  take_profit  = entry_price + stop_distance × min_rr_ratio
+  stop_loss    = fill_price - stop_distance
+  take_profit  = fill_price + stop_distance × min_rr_ratio
 
 SELL:
-  stop_loss    = entry_price + stop_distance
-  take_profit  = entry_price - stop_distance × min_rr_ratio
+  stop_loss    = fill_price + stop_distance
+  take_profit  = fill_price - stop_distance × min_rr_ratio
 ```
 
 Parameters come from the strategy YAML:
-- `risk.stop_loss.default_pct` — stop distance as % of entry price
+- `risk.stop_loss.default_pct` — stop distance as % of fill price
 - `risk.take_profit.min_rr_ratio` — take profit as a multiple of the stop distance
 
 ### 5.3 Exit rules (via `evaluate_position`)
@@ -284,14 +293,19 @@ The stop only ratchets in the profitable direction. Once raised (BUY) or lowered
 
 ### 5.4 P&L calculation
 
-P&L is computed in **points** (price units), not currency:
+P&L is computed in **points** (price units), not currency. Spread costs are embedded in the fill prices when `spread_pts > 0`:
 
 ```
-BUY:  pnl_points = exit_price - entry_price
-SELL: pnl_points = entry_price - exit_price
+entry_fill (BUY)  = next_bar.open + spread_pts/2   (buy at ask)
+entry_fill (SELL) = next_bar.open - spread_pts/2   (sell at bid)
+exit_fill  (BUY)  = bar.close    - spread_pts/2    (close BUY by selling at bid)
+exit_fill  (SELL) = bar.close    + spread_pts/2    (close SELL by buying at ask)
+
+BUY:  pnl_points = exit_fill - entry_fill  →  net cost = full spread
+SELL: pnl_points = entry_fill - exit_fill  →  net cost = full spread
 ```
 
-No spread, commission, or contract size is applied. All metrics in `BacktestResult` are in price points.
+Spread values come from `backtest/spreads.py` (Capital.com typical mid-session values per instrument). No commission or contract size is applied. All metrics in `BacktestResult` are in price points.
 
 ### 5.5 Output — `BacktestResult` dataclass
 
@@ -434,7 +448,7 @@ The optimal gap threshold was found by sweeping 0.0%–1.5% (see `backtest/tune_
 
 All tests use synthetic bar sequences — no real DB file or network access required.
 
-### 7.1 `tests/unit/test_signals.py` (25 tests)
+### 7.1 `tests/unit/test_signals.py` (32 tests)
 
 Tests for `backtest/signals.py`:
 
@@ -464,7 +478,7 @@ Tests for `backtest/signals.py`:
 | `test_matches_functional_wrapper` (state) | `MeanReversionSignalState` and `mean_reversion_signal()` agree on last bar |
 | `test_no_signal_before_window_full` (state) | Returns `None` for the first 19 bars |
 
-### 7.2 `tests/unit/test_engine.py` (21 tests)
+### 7.2 `tests/unit/test_engine.py` (25 tests)
 
 Tests for `backtest/engine.py`:
 
@@ -501,7 +515,10 @@ Tests for `backtest/engine.py`:
 | `test_net_pnl_pts_is_sum_of_trade_pnl` | Single stop-out trade; `net_pnl_pts` equals `trade.pnl_points` and is negative |
 | `test_avg_r_computed_correctly` | Stop-out at 0.50 from entry 1.10; asserts `avg_r = net_pnl_pts / (1 × 1.10 × 0.02)` and is negative |
 | `test_avg_r_zero_when_no_trades` | Empty bars → `avg_r == 0.0` |
-| `test_mean_reversion_midline_exit` | 19 flat bars + 17 bars at 1.5; z drops to 0.5 at bar 34 (window mean rises) → `exit_reason == "Z-score midline"` |
+| `test_mean_reversion_midline_exit` | 19 flat bars + 17 bars at 1.5; z drops to 0.5 at bar 34 (window mean rises) → `exit_reason == "Z-score midline"` (tested with `max_hold_bars=50` to isolate midline) |
+| `test_hold_cap_closes_mean_reversion_trade` | Signal fires, price stays at spike level; default `max_hold_bars=5` → `exit_reason == "Hold cap"` after 5 bars |
+| `test_spread_adjusts_buy_entry_and_exit` | BUY with `spread_pts=0.10`: `entry_price = open + 0.05`, `exit_price = close - 0.05` |
+| `test_spread_adjusts_sell_entry_and_exit` | SELL with `spread_pts=0.10`: `entry_price = open - 0.05`, `exit_price = close + 0.05` |
 | `test_hard_stop_takes_priority_over_midline_exit` | Price crashes far beyond stop level → hard stop fires before `check_exit()` is reached |
 
 ### 7.3 `tests/unit/test_signals.py` additions
@@ -509,7 +526,22 @@ Tests for `backtest/engine.py`:
 | Test class | Tests added |
 |---|---|
 | `TestADXGate` | `test_momentum_suppressed_when_adx_below_threshold`, `test_momentum_fires_when_adx_gate_disabled`, `test_momentum_suppressed_by_high_explicit_threshold`, `test_mean_reversion_fires_in_flat_market`, `test_mean_reversion_suppressed_in_trending_market` |
+| `TestATRGate` | `test_gate_blocks_when_spread_large_relative_to_atr`, `test_gate_disabled_when_spread_zero`, `test_gate_permissive_while_atr_warming_up` |
+| `TestHoldCap` | `test_hold_cap_fires_after_max_bars`, `test_hold_cap_not_triggered_before_max_bars`, `test_hold_cap_cleared_after_notify_exit`, `test_hold_cap_priority_over_z_score_midline` |
 | `TestCheckExit` | `test_mean_reversion_check_exit_none_before_window_full`, `test_mean_reversion_check_exit_none_when_z_large`, `test_mean_reversion_check_exit_fires_when_z_small`, `test_momentum_check_exit_always_none` |
+
+### 7.4a `tests/unit/test_spreads.py` (8 tests)
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_fx_major_returns_one_pip` | EURUSD / GBPUSD / EURGBP → 0.0001 |
+| `test_usdjpy_returns_one_pip_in_yen` | USDJPY → 0.01 |
+| `test_index_returns_absolute_points` | US500 → 0.5; DE40 / UK100 → 1.0 |
+| `test_gold_returns_absolute_usd` | GOLD → 0.35 |
+| `test_oil_returns_absolute_usd` | XBRUSD → 0.04 |
+| `test_crypto_scales_with_price` | BTCUSD/ETHUSD → 0.07% × price |
+| `test_unknown_epic_returns_zero` | Unknown epic → 0.0 |
+| `test_spread_positive_for_all_watchlist_epics` | All 11 watchlist instruments return > 0 |
 
 ### 7.4 `tests/unit/test_run.py` (13 tests)
 
@@ -539,11 +571,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (215 tests)
+# Full unit suite (233 tests)
 pytest tests/unit/ -v
 ```
 
-All 215 unit tests pass with no network access or real DB file.
+All 233 unit tests pass with no network access or real DB file.
 
 ---
 
