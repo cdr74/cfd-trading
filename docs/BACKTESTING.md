@@ -509,7 +509,7 @@ ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.3
 - **FX pairs (except USDJPY), crypto, and commodities remain unprofitable** — EURUSD/GBPUSD/EURGBP PF 0.44–0.80; BTCUSD PF 0.52. Wide spreads relative to typical OR width erode edge on instruments where the ORB structural advantage is weaker.
 - **XBRUSD borderline** — PF 1.06 but MaxDD 9.2%; not reliable.
 
-### 6.8 ORB v3 results (Jan–May 2026, M15, 2-bar OR, OR-width stop, ATR-trailing exit, DE40/UK100/USDJPY only)
+### 6.8 ORB v3 results (Jan–May 2026, M15, 2-bar OR, OR-width stop, ATR-trailing exit, DE40/UK100/USDJPY only — superseded)
 
 Improvements vs v2: (a) instrument universe restricted to confirmed-edge instruments; (b) fixed 2×OR-width TP replaced with ATR-trailing stop at 1.5×ATR(14) from bar high/low peak; TP set to 99× (effectively disabled).
 
@@ -532,6 +532,76 @@ UK100     orb             70      35.7%   1.10    3.267    100.0%  4.84     +0.0
 
 **Diagnostic — why ATR-trailing underperforms fixed TP here:**
 The OR width (defined over 30 min) already encodes the session opening volatility — it is effectively a session-calibrated ATR. Using the OR width as the TP distance is therefore a natural ATR-based target. The per-bar M15 ATR(14) is more variable and at 1.5× is tighter than the 2×OR-width target on most sessions, causing premature exits on what would have been full TP hits. A larger ATR multiplier (e.g. 3.0×) or a combined approach (ATR trail with OR-width TP as a floor) may recover the v2 edge while adding upside capture on large session moves.
+
+---
+
+### 6.9 ORB v2 directional split — full universe (Jan–May 2026, M15)
+
+Same ORB v2 configuration as §6.7 (2-bar OR, OR-width stop, 2:1 R:R, all instruments). The backtest output now includes a second LONG vs SHORT breakdown table, exposing regime bias in the aggregate PF figures.
+
+Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
+
+**Main table (combined LONG + SHORT):**
+
+```
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
+--------  --------------  ------  ------  ------  -------  ------  -------  -------
+EURUSD    orb             68      30.9%   0.80    1.528    69.1%   4.86     -0.33R
+GBPUSD    orb             69      26.1%   0.54    4.001    73.9%   4.93     -0.34R
+USDJPY    orb             68      36.8%   1.27    1.869    63.2%   4.86     +0.10R
+EURGBP    orb             62      27.4%   0.44    3.023    74.2%   4.42     -0.37R
+US500     orb             67      40.3%   1.03    4.167    88.1%   4.64     -0.12R
+DE40      orb             71      39.4%   1.62    2.326    85.9%   4.91     +0.11R
+UK100     orb             69      42.0%   1.19    4.421    84.1%   4.77     +0.09R
+GOLD      orb             72      31.9%   0.83    4.006    91.7%   4.86     -0.34R
+XBRUSD    orb             74      32.4%   1.06    9.189    94.6%   4.76     -0.31R
+BTCUSD    orb             71      31.0%   0.52    12.934   90.1%   7.03     -0.36R
+ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.38R
+```
+
+**Directional split:**
+
+```
+Epic      Strategy        L-Trades  L-Win%   L-PF    S-Trades  S-Win%   S-PF
+--------  --------------  --------  -------  ------  --------  -------  ------
+EURUSD    orb             32        31.2%    1.21    36        30.6%    0.55
+GBPUSD    orb             35        31.4%    0.68    34        20.6%    0.43
+USDJPY    orb             38        44.7%    1.33    30        26.7%    1.22
+EURGBP    orb             28        17.9%    0.22    34        35.3%    0.69
+US500     orb             42        38.1%    0.98    25        44.0%    1.12
+DE40      orb             37        40.5%    2.31    34        38.2%    1.02
+UK100     orb             34        41.2%    1.77    35        42.9%    0.83
+GOLD      orb             36        30.6%    0.48    36        33.3%    1.30
+XBRUSD    orb             41        26.8%    0.59    33        39.4%    1.69
+BTCUSD    orb             39        30.8%    0.64    32        31.2%    0.39
+ETHUSD    orb             36        27.8%    0.64    35        28.6%    0.43
+```
+
+**Instrument-by-instrument reading:**
+
+| Instrument | Combined PF | L-PF | S-PF | Verdict |
+|------------|-------------|------|------|---------|
+| USDJPY | 1.27 | 1.33 | 1.22 | **Genuine two-way edge.** Both directions PF > 1.2. Jan-May 2026 yen volatility created session-range breakouts regardless of direction. |
+| DE40 | 1.62 | 2.31 | 1.02 | **LONG-regime driven.** Jan-May 2026 was broadly bullish German equities. LONG ORB trades ride intraday momentum; SHORT ORB trades fight the trend. S-PF barely > 1.0. |
+| UK100 | 1.19 | 1.77 | 0.83 | **LONG-regime driven.** Same equity bull regime. S-PF < 1.0 — the strategy is profitable overall only because LONG trades dominate. |
+| US500 | 1.03 | 0.98 | 1.12 | **Slight SHORT bias** (inverse of DE40/UK100). Interesting divergence — US500 ORB SHORT was more productive. Neither direction strong enough to trade. |
+| XBRUSD | 1.06 | 0.59 | 1.69 | **Strong SHORT bias.** Brent crude declined Jan-May 2026 — LONG ORB trades failed repeatedly; SHORT ORB trades caught the trend. Regime artifact. |
+| GOLD | 0.83 | 0.48 | 1.30 | **SHORT bias.** Gold trended lower in this window. Even the better direction (S-PF 1.30) is driven by regime. |
+| EURUSD | 0.80 | 1.21 | 0.55 | **LONG-only marginal edge.** Combined < 1.0; SHORT consistently unprofitable. Insufficient to trade. |
+| BTCUSD | 0.52 | 0.64 | 0.39 | No usable edge either direction. |
+| ETHUSD | 0.54 | 0.64 | 0.43 | No usable edge either direction. |
+| GBPUSD | 0.54 | 0.68 | 0.43 | No usable edge either direction. |
+| EURGBP | 0.44 | 0.22 | 0.69 | No usable edge either direction. |
+
+**Key takeaway — regime bias vs structural edge:**
+
+The directional split confirms that most ORB positive PF in this 14-week sample is regime-driven, not structural:
+
+- **USDJPY** is the only instrument with genuine two-way ORB edge (both L-PF and S-PF > 1.2). Yen volatility at session open tends to be structural — the Bank of Japan policy uncertainty generates real range breakouts independent of trend.
+- **DE40 / UK100** positive combined PF comes almost entirely from LONG trades in a bull equity regime. A similar 14-week bear leg would likely produce the mirror image (S-PF dominant, L-PF < 1.0). These instruments need multi-regime data to assess structural ORB edge.
+- **Commodities (GOLD, XBRUSD)** show the opposite directional bias to equities, consistent with the same risk-off/risk-on regime rotation. The SHORT edge in these instruments during Jan-May 2026 is not structural ORB logic — it is trend-riding.
+
+**Implication for backtesting:** 14 weeks of single-regime data cannot distinguish ORB structural edge from momentum. A meaningful test requires at least 6–12 months spanning both a bull and a bear phase. Until more data is available, instrument selection should be conservative: USDJPY is the only instrument with defensible two-way evidence.
 
 ---
 
@@ -719,6 +789,19 @@ All 284 unit tests pass with no network access or real DB file.
 | `Stop%` | % of trades closed by hard stop | Very high Stop% (> 50%) suggests signal is firing into adverse conditions or stop distance is too tight |
 | `Sig/wk` | Average entry signals per week | < 1: strategy is too selective for the instrument; > 10: signals may be noise |
 | `AvgR` | Expectancy per trade in R-multiples: `(net_pnl / n) ÷ (entry × stop%)` | Positive = profitable expectancy; 0.0 = breakeven; negative = losing strategy. Comparable across all instruments. See §8.6 for interpretation. |
+
+**Directional split table** (second table in the output):
+
+| Column | Meaning | Interpretation |
+|--------|---------|---------------|
+| `L-Trades` | Completed LONG/BUY trades | Compare to `S-Trades` — large imbalance suggests the signal has a directional bias |
+| `L-Win%` | Win rate for LONG trades only | Isolated from SHORT performance |
+| `L-PF` | Profit factor for LONG trades only | Primary indicator of directional edge: `—` means no trades in that direction |
+| `S-Trades` | Completed SHORT/SELL trades | |
+| `S-Win%` | Win rate for SHORT trades only | |
+| `S-PF` | Profit factor for SHORT trades only | When L-PF and S-PF both > 1.2, the strategy has two-way edge regardless of market regime |
+
+**Interpreting the directional split:** If combined PF > 1.0 but one directional PF < 1.0, the aggregate edge comes entirely from one direction and is likely regime-driven. A strategy with genuine structural edge should show PF > 1.0 in both directions across a representative sample period.
 
 ### 8.2 Calculating net win/loss
 

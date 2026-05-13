@@ -1,11 +1,5 @@
 name: orb
-description: "Opening Range Breakout — 2-bar (30-min) OR defines range; stop at OR boundary; ATR-trailing exit"
-
-# Instruments with confirmed ORB edge (v2 backtest: DE40 PF 1.62, UK100 PF 1.19, USDJPY PF 1.27)
-instruments:
-  - DE40
-  - UK100
-  - USDJPY
+description: "Opening Range Breakout — 2-bar (30-min) OR defines range; stop at OR boundary; 2×OR-width TP"
 
 entry:
   min_size: 0.1
@@ -19,12 +13,13 @@ risk:
     max_pct: 2.0
   trailing_stop:
     enabled: true
-    atr_multiplier: 1.5   # trail at 1.5 × ATR(14) from bar high/low peak
-    min_distance_pct: 0.3  # fallback used by evaluate_position if atr_multiplier absent
+    min_distance_pct: 0.3
+    max_distance_pct: 1.5
+    update_interval_min: 1
   take_profit:
-    dynamic: false
-    min_rr_ratio: 99    # effectively disabled — ATR trailing stop is the exit
-    max_pct: 99.0
+    dynamic: true
+    min_rr_ratio: 2.0
+    max_pct: 10.0
   position_scaling:
     enabled: false
     max_adds: 0

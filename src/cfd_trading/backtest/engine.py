@@ -51,6 +51,13 @@ class BacktestResult:
     signal_frequency: float     # trades per week
     net_pnl_pts: float = 0.0   # sum of all pnl_points; sign indicates profit/loss
     avg_r: float = 0.0          # expectancy per trade in R-multiples
+    # Directional split — distinguishes genuine edge from trend-riding bias
+    long_trades: int = 0
+    long_win_rate: float = 0.0
+    long_profit_factor: float = 0.0
+    short_trades: int = 0
+    short_win_rate: float = 0.0
+    short_profit_factor: float = 0.0
     trades: list[Trade] = field(default_factory=list)
 
 
@@ -245,6 +252,20 @@ def _pnl(direction: str, entry: float, exit_price: float) -> float:
     return round(exit_price - entry if direction == "BUY" else entry - exit_price, 6)
 
 
+def _dir_profit_factor(trades: list[Trade]) -> float:
+    if not trades:
+        return 0.0
+    gross_profit = sum(t.pnl_points for t in trades if (t.pnl_points or 0) > 0)
+    gross_loss   = abs(sum(t.pnl_points for t in trades if (t.pnl_points or 0) <= 0))
+    return round(gross_profit / gross_loss, 3) if gross_loss > 0 else float("inf")
+
+
+def _dir_win_rate(trades: list[Trade]) -> float:
+    if not trades:
+        return 0.0
+    return round(sum(1 for t in trades if (t.pnl_points or 0) > 0) / len(trades), 3)
+
+
 def _summarise(
     epic: str, strategy: str, trades: list[Trade], bars: list[OHLCBar], stop_pct: float = 0.0
 ) -> BacktestResult:
@@ -294,6 +315,11 @@ def _summarise(
         r_per_trade = avg_entry * stop_pct
         avg_r = round(net_pnl_pts / (n * r_per_trade), 4) if r_per_trade > 0 else 0.0
 
+    long_t  = [t for t in trades if t.direction == "BUY"]
+    short_t = [t for t in trades if t.direction == "SELL"]
+    long_pf  = _dir_profit_factor(long_t)
+    short_pf = _dir_profit_factor(short_t)
+
     return BacktestResult(
         epic=epic,
         strategy=strategy,
@@ -306,5 +332,11 @@ def _summarise(
         signal_frequency=signal_frequency,
         net_pnl_pts=net_pnl_pts,
         avg_r=avg_r,
+        long_trades=len(long_t),
+        long_win_rate=_dir_win_rate(long_t),
+        long_profit_factor=long_pf,
+        short_trades=len(short_t),
+        short_win_rate=_dir_win_rate(short_t),
+        short_profit_factor=short_pf,
         trades=trades,
     )

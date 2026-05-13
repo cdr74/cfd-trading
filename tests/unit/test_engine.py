@@ -342,6 +342,52 @@ class TestMetrics:
         assert "Hard stop" in result.trades[0].exit_reason
 
 
+class TestDirectionalSplit:
+    """long_trades/short_trades/long_pf/short_pf fields on BacktestResult."""
+
+    def test_all_long_trades_no_short(self, momentum_cfg):
+        # Signal sequence produces only LONG entries; short fields should be zero
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        exit_bar    = _bar(23 * 60, 2.00)   # take profit
+        bars = signal_bars + [entry_bar, exit_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.long_trades + result.short_trades == result.total_trades
+        assert result.short_trades == 0
+        assert result.short_win_rate == 0.0
+        assert result.short_profit_factor == 0.0
+
+    def test_directional_split_sums_to_total(self, momentum_cfg):
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        crash_bar   = _bar(23 * 60, 0.50)
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.long_trades + result.short_trades == result.total_trades
+
+    def test_long_pf_correct_for_winning_trade(self, momentum_cfg):
+        # Disable trailing so TP fires cleanly
+        cfg = {
+            "risk": {
+                "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
+                "trailing_stop": {"enabled": False},
+                "take_profit": {"dynamic": True, "min_rr_ratio": 1.5},
+                "time_exit": {"enabled": False},
+            }
+        }
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        tp_bar      = _bar(23 * 60, 2.00)
+        bars = signal_bars + [entry_bar, tp_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, cfg, RISK_CFG)
+        assert result.long_trades == 1
+        assert result.long_win_rate == 1.0
+        assert result.long_profit_factor == float("inf")  # no losses
+
+
 class TestATRTrailing:
     """ATR-trailing stop: trails at N×ATR(14) from bar high/low peak."""
 

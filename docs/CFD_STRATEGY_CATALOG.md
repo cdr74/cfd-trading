@@ -484,6 +484,7 @@ Tracks all signal and parameter changes in chronological order so we can see wha
 | 2026-05-13 | ORB v1 — 1-bar OR, fixed 0.5% stop, 2:1 R:R | M15 | Stop rate 88–97%; all instruments PF < 1.1; best: EURUSD 1.09, USDJPY 1.16 | Single-bar OR is noisy; false breakouts dominate; fixed stop unrelated to OR width |
 | 2026-05-13 | ORB v2 — 2-bar OR (30 min), OR-width stop (stop=OR low/high), 2:1 R:R | M15 | Stop rate reduced to 63–94%; DE40 PF 1.62, UK100 PF 1.19, USDJPY PF 1.27, US500 PF 1.03 | Clear equity index + USDJPY edge. FX pairs, crypto, commodities remain unprofitable |
 | 2026-05-13 | ORB v3 — ATR-trailing exit (1.5×ATR) replaces fixed TP; universe restricted to DE40/UK100/USDJPY | M15 | DE40 PF 1.46 (win% 47.9%), UK100 PF 1.10, USDJPY PF 1.22 | ATR trail at 1.5× too tight — exits winners early. Fixed 2×OR-width TP (v2) remains better |
+| 2026-05-13 | ORB v2 with LONG/SHORT directional split — full universe (no instrument filter) | M15 | DE40: L-PF 2.31 / S-PF 1.02; UK100: L-PF 1.77 / S-PF 0.83; USDJPY: L-PF 1.33 / S-PF 1.22; XBRUSD: L-PF 0.59 / S-PF 1.69; GOLD: L-PF 0.48 / S-PF 1.30 | Most positive PF is regime-driven (Jan-May 2026 bullish equities). Only USDJPY shows genuine two-way ORB edge (both PF > 1.2). DE40/UK100 edge comes entirely from LONG direction; commodities have opposite SHORT bias. Need multi-regime data (6–12 months) to distinguish structural ORB edge from trend-riding |
 
 ---
 

@@ -86,6 +86,7 @@ def main() -> None:
         return
 
     _print_table(results)
+    _print_directional_table(results)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,17 @@ _COLS = [
     ("AvgR",        7,  "avg_r"),
 ]
 
+_DIR_COLS = [
+    ("Epic",       8,  "epic"),
+    ("Strategy",   14, "strategy"),
+    ("L-Trades",   8,  "long_trades"),
+    ("L-Win%",     7,  "long_win_rate"),
+    ("L-PF",       6,  "long_profit_factor"),
+    ("S-Trades",   8,  "short_trades"),
+    ("S-Win%",     7,  "short_win_rate"),
+    ("S-PF",       6,  "short_profit_factor"),
+]
+
 
 def _print_table(results: list[BacktestResult]) -> None:
     header = "  ".join(label.ljust(width) for label, width, _ in _COLS)
@@ -198,6 +210,33 @@ def _print_table(results: list[BacktestResult]) -> None:
                 cell = f"{val:+.2f}R"
             else:
                 cell = str(val)
+            row_vals.append(cell.ljust(width))
+        print("  ".join(row_vals))
+
+
+def _print_directional_table(results: list[BacktestResult]) -> None:
+    """Second table: LONG vs SHORT split — shows directional bias vs genuine two-way edge."""
+    print()
+    print("Directional split  (L = LONG/BUY   S = SHORT/SELL)")
+    header = "  ".join(label.ljust(width) for label, width, _ in _DIR_COLS)
+    sep    = "  ".join("-" * width         for _, width, _ in _DIR_COLS)
+    print(header)
+    print(sep)
+    for r in results:
+        row_vals = []
+        for label, width, attr in _DIR_COLS:
+            val = getattr(r, attr)
+            if attr in ("long_win_rate", "short_win_rate"):
+                cell = f"{val * 100:.1f}%" if val else "—"
+            elif attr in ("long_profit_factor", "short_profit_factor"):
+                if val == 0.0:
+                    cell = "—"
+                elif val == float("inf"):
+                    cell = "inf"
+                else:
+                    cell = f"{val:.2f}"
+            else:
+                cell = str(val) if val else "—"
             row_vals.append(cell.ljust(width))
         print("  ".join(row_vals))
 
