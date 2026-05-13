@@ -350,12 +350,16 @@ The OR width itself is a session-calibrated ATR proxy. Setting TP at 2×OR-width
 
 ### Instrument Universe for ORB
 
-Based on backtests, the ORB strategy should be restricted to:
-- **DE40** — highest edge (PF 1.62); Xetra open is the cleanest structural event
-- **UK100** — clear edge (PF 1.19); LSE open
-- **USDJPY** — edge present (PF 1.27); tightest effective spread relative to OR width among FX pairs
+Initial analysis flagged DE40, UK100, and USDJPY as the best performers (PF > 1.1). However, restricting to these three is selection bias — the backtest window (Jan–May 2026) was a single bullish equity regime, and a simple "buy Feb 1, sell May" trade would have been profitable on UK100/USDJPY. An algorithm needs to demonstrate edge in adverse scenarios too.
 
-All other instruments in the current watchlist show no consistent ORB edge and should be excluded.
+**Directional split analysis** exposes the regime artifact:
+- **DE40:** L-PF 2.31 / S-PF 1.02 — positive combined PF driven entirely by LONG trades in a bull regime
+- **UK100:** L-PF 1.77 / S-PF 0.83 — same pattern; SHORT ORB was unprofitable
+- **USDJPY:** L-PF 1.33 / S-PF 1.22 — **only instrument with genuine two-way edge** (both directions PF > 1.2)
+- **GOLD:** L-PF 0.48 / S-PF 1.30 — SHORT bias consistent with gold declining in this period
+- **XBRUSD:** L-PF 0.59 / S-PF 1.69 — strong SHORT bias consistent with oil declining
+
+**Current decision: no instrument filter.** The backtest runs all instruments with the directional split output visible. Until we have multi-regime data (6–12 months spanning both bull and bear phases), instrument selection based on in-sample PF is overfit. USDJPY is the only instrument with evidence of structural two-way ORB edge at this time.
 
 ---
 
