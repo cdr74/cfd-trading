@@ -3,7 +3,12 @@
 Usage:
     python -m cfd_trading.backtest.run --strategy momentum --epic EURUSD
     python -m cfd_trading.backtest.run --all-strategies --all-epics
-    python -m cfd_trading.backtest.run --strategy mean_reversion --all-epics --resolution M1
+    python -m cfd_trading.backtest.run --all-strategies --all-epics --resolution M15
+
+Resolution handling:
+    M1 bars are always fetched from the DB.  If --resolution is M5/M15/M30/M60,
+    the M1 bars are aggregated in-process before being passed to the engine.
+    No separate higher-resolution data is needed in the DB.
 
 Environment:
     BACKTEST_DB_PATH  — path to SQLite DB with ohlc_bars (default: /mnt/c/Users/chris/dev/trading-data/trading.db)
@@ -25,6 +30,7 @@ from cfd_trading.storage.repository import get_bars
 from cfd_trading.strategy.loader import load_strategy, list_strategies
 from cfd_trading.backtest.engine import run_backtest, BacktestResult
 from cfd_trading.backtest.spreads import spread_points
+from cfd_trading.backtest.aggregate import aggregate_bars
 
 _DEFAULT_DB_PATH = "/mnt/c/Users/chris/dev/trading-data/trading.db"
 _CONFIG_DIR = Path(os.getenv("CONFIG_DIR", str(Path(__file__).parents[3] / "config")))
@@ -43,6 +49,7 @@ def main() -> None:
     strategies = _resolve_strategies(args, config_dir)
     epics = _resolve_epics(args, config_dir)
     risk_config = _load_risk(config_dir)
+    period = _parse_resolution(args.resolution)
 
     conn = get_connection(db_path)
 
@@ -50,13 +57,18 @@ def main() -> None:
     for strategy_name in strategies:
         strat = load_strategy(strategy_name, config_dir)
         for epic in epics:
-            bars = get_bars(conn, epic, args.resolution)
-            if not bars:
-                print(f"  [skip] {epic}/{strategy_name} — no bars in DB for resolution {args.resolution}")
+            bars_m1 = get_bars(conn, epic, "M1")
+            if not bars_m1:
+                print(f"  [skip] {epic}/{strategy_name} — no M1 bars in DB")
                 continue
-            sp = spread_points(epic, bars[0].close) if bars else 0.0
+            bars = aggregate_bars(bars_m1, period)
+            sp = spread_points(epic, bars[0].close)
+            # M30 gate is self-defeating until true M30 bars are available (see BACKTESTING.md §4.1)
+            signal_kwargs: dict = {}
+            if strategy_name == "momentum":
+                signal_kwargs["m30_gate"] = False
             result = run_backtest(epic, strategy_name, bars, strat.config, risk_config,
-                                  spread_pts=sp)
+                                  spread_pts=sp, signal_kwargs=signal_kwargs)
             results.append(result)
 
     conn.close()
@@ -85,8 +97,24 @@ def _parse_args() -> argparse.Namespace:
     strat_group.add_argument("--strategy", metavar="NAME", help="Strategy name (e.g. momentum)")
     strat_group.add_argument("--all-strategies", action="store_true", help="Run all available strategies")
 
-    p.add_argument("--resolution", default="M1", help="Bar resolution (default: M1)")
+    p.add_argument(
+        "--resolution", default="M1",
+        help="Target bar resolution: M1 M5 M15 M30 M60 (default: M1). "
+             "M1 bars are fetched from DB and aggregated in-process.",
+    )
     return p.parse_args()
+
+
+def _parse_resolution(resolution: str) -> int:
+    """Parse 'M15' → 15.  Raises ValueError for unrecognised formats."""
+    if resolution.startswith("M"):
+        try:
+            minutes = int(resolution[1:])
+            if minutes > 0:
+                return minutes
+        except ValueError:
+            pass
+    raise ValueError(f"Unsupported resolution '{resolution}'. Use M1, M5, M15, M30, M60.")
 
 
 # ---------------------------------------------------------------------------

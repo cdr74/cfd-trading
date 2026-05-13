@@ -48,8 +48,9 @@ Windows (MetaTrader 5)
 
 WSL2 (cfd-trading package)
   backtest/run.py  (CLI entry point)
-    ├── storage/repository.py  get_bars()
+    ├── storage/repository.py  get_bars()  ← always fetches M1
     │     └── reads ohlc_bars from trading.db via /mnt/c/...
+    ├── backtest/aggregate.py  aggregate_bars()  ← M1→M15/M30/… in-process
     ├── strategy/loader.py  load_strategy()
     │     └── reads config/strategies/<name>.yaml + .md
     ├── backtest/signals.py  momentum_signal() / mean_reversion_signal()
@@ -352,8 +353,9 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
   python -m cfd_trading.backtest.run --all-strategies --all-epics
 
-# Override bar resolution (default: M1)
-python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resolution M5
+# 15-minute bars — M1 data fetched from DB and aggregated in-process
+BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
+  python -m cfd_trading.backtest.run --all-strategies --all-epics --resolution M15
 ```
 
 ### 6.2 Arguments
@@ -364,7 +366,7 @@ python -m cfd_trading.backtest.run --strategy mean_reversion --epic GOLD --resol
 | `--all-epics` | Run all instruments from `config/watchlist.yaml` |
 | `--strategy NAME` | Run a single strategy (mutually exclusive with `--all-strategies`) |
 | `--all-strategies` | Run all strategies discovered in `config/strategies/` (excludes `_base` and `scan`) |
-| `--resolution` | Bar resolution to query from DB (default: `M1`) |
+| `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60` (default: `M1`). M1 bars are always fetched from DB; higher resolutions are aggregated in-process via `backtest/aggregate.py`. |
 
 ### 6.3 Environment variables
 
@@ -550,6 +552,14 @@ Tests for `backtest/engine.py`:
 | `test_unknown_epic_returns_zero` | Unknown epic → 0.0 |
 | `test_spread_positive_for_all_watchlist_epics` | All 11 watchlist instruments return > 0 |
 
+### 7.4b `tests/unit/test_aggregate.py` (15 tests)
+
+| Test class | What it verifies |
+|---|---|
+| `TestAggregateIdentity` | `period=1` returns input unchanged; empty list returns empty |
+| `TestAggregateOHLC` | Single-group OHLC: 15 bars → 1 M15 bar; open=first, high=max, low=min, close=last, volume=sum; resolution label; ts=first bar; epic preserved |
+| `TestAggregateMultipleGroups` | 30 bars → 2 groups; correct group boundary timestamps; partial end-group included; M5 label correct |
+
 ### 7.4 `tests/unit/test_run.py` (13 tests)
 
 Tests for `backtest/run.py`:
@@ -578,11 +588,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (238 tests)
+# Full unit suite (253 tests)
 pytest tests/unit/ -v
 ```
 
-All 238 unit tests pass with no network access or real DB file.
+All 253 unit tests pass with no network access or real DB file.
 
 ---
 

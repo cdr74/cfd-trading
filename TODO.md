@@ -288,6 +288,13 @@ These improvements address the three cost/edge issues identified in research.
   - Hard gate: LONG blocked when M30 bearish; SHORT blocked when M30 bullish.
   - Permissive while buffer warming up (<30 bars). Disable via `signal_kwargs={"m30_gate": False}`.
   - 5 new unit tests in `TestM30Gate` (238 total).
+  - **Post-backtest finding (2026-05-13):** M30 gate is self-defeating at M1 — crossovers happen at trend reversals when the 30-bar look-back still reflects prior direction. Gate effectively blocked all signals. Disabled in `run.py` (`m30_gate=False`). Needs true M30 bars from MT5 to be useful.
+
+- [x] **Step 4 — Multi-resolution backtesting via in-process aggregation**
+  - `backtest/aggregate.py`: `aggregate_bars(bars, period_minutes)` — groups M1 bars by UTC time bucket, merges OHLC. Handles M5/M15/M30/M60.
+  - `run.py`: always fetches M1 from DB, aggregates to `--resolution` target in-process. M30 gate disabled for all resolutions pending true M30 data.
+  - 15 new unit tests in `test_aggregate.py` (253 total).
+  - **Next:** run `--all-strategies --all-epics --resolution M15` and assess results.
 
 ---
 
