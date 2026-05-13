@@ -483,6 +483,7 @@ Tracks all signal and parameter changes in chronological order so we can see wha
 | 2026-05-13 | M1 → M15 aggregation (in-process); M30 gate disabled | M15 | Mean rev: best PF 1.10 DE40, most < 1.0. Momentum: near-zero signals — EMA9/21 warm-up is 22 bars = 5.5 hours at M15 | EMA9/21 wrong for M15 (too slow). Mean rev marginally better but no real edge. Resolution change alone insufficient |
 | 2026-05-13 | ORB v1 — 1-bar OR, fixed 0.5% stop, 2:1 R:R | M15 | Stop rate 88–97%; all instruments PF < 1.1; best: EURUSD 1.09, USDJPY 1.16 | Single-bar OR is noisy; false breakouts dominate; fixed stop unrelated to OR width |
 | 2026-05-13 | ORB v2 — 2-bar OR (30 min), OR-width stop (stop=OR low/high), 2:1 R:R | M15 | Stop rate reduced to 63–94%; DE40 PF 1.62, UK100 PF 1.19, USDJPY PF 1.27, US500 PF 1.03 | Clear equity index + USDJPY edge. FX pairs, crypto, commodities remain unprofitable |
+| 2026-05-13 | ORB v3 — ATR-trailing exit (1.5×ATR) replaces fixed TP; universe restricted to DE40/UK100/USDJPY | M15 | DE40 PF 1.46 (win% 47.9%), UK100 PF 1.10, USDJPY PF 1.22 | ATR trail at 1.5× too tight — exits winners early. Fixed 2×OR-width TP (v2) remains better |
 
 ---
 

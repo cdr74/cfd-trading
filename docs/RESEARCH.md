@@ -295,3 +295,84 @@ regime:
 | Momentum structural edge | Moderate (H > 0.5 documented) | Weak (H ≈ 0.50, near random walk) |
 | Signal source | Single timeframe | 30-min signal + 1-min entry trigger |
 | Mean reversion viability | Good (daily ATR >> spread) | Structurally difficult (ATR ≈ 3–8× spread only) |
+
+---
+
+## Phase 2 — ORB at M15 (May 2026)
+
+**Date compiled:** 2026-05-13  
+**Timeframe:** M15 bars (aggregated in-process from M1)  
+**Instruments tested:** EURUSD, GBPUSD, USDJPY, EURGBP, US500, DE40, UK100, GOLD, XBRUSD, BTCUSD, ETHUSD  
+
+---
+
+### ORB Structural Findings
+
+**Opening Range Breakout has genuine edge on European equity indices and USDJPY; it does not on FX pairs, crypto, or commodities.**
+
+| Instrument | ORB v2 PF | ORB v2 Win% | Assessment |
+|---|---|---|---|
+| DE40 | 1.62 | 39.4% | Clear edge — Xetra open (08:00 UTC) is a hard liquidity event |
+| UK100 | 1.19 | 42.0% | Clear edge — LSE open (08:00 UTC) |
+| USDJPY | 1.27 | 36.8% | Edge present — tight spreads relative to OR width |
+| US500 | 1.03 | 40.3% | Borderline — NYSE open (14:30 UTC) structural support, but Capital.com spread erodes it |
+| EURUSD / GBPUSD | 0.80 / 0.54 | 31% / 26% | No edge — London FX open is a soft ramp, not a discrete auction |
+| BTCUSD / ETHUSD | 0.52 / 0.54 | 31% / 28% | No edge — no session open structure on 24/7 instruments |
+
+**Why equity indices respond to ORB:**  
+The Xetra and LSE auction process creates genuine order flow imbalance at 08:00 UTC — accumulated overnight orders clear at the open, driving directional momentum that tends to persist for the first session hour. This is the mechanism Zarattini & Aziz documented on US equity index futures (ES, NQ). DE40 and UK100 exhibit the same structural property.
+
+**Why FX does not:**  
+The "London open" is a gradual increase in liquidity, not a discrete auction. There is no clearing event — institutional orders arrive continuously from 07:30 to 08:30 UTC. The ORB reference level from one 15-min bar has no special predictive value over the subsequent hour.
+
+**OR period (key finding):**  
+2-bar OR (30 min) is substantially better than 1-bar (15 min). Single-bar OR has stop rates 88–97%; 2-bar OR reduces this to 63–94%. The 30-min OR matches the research setup (Zarattini & Aziz) and gives price two bars to establish genuine support/resistance. This is consistent with the literature's finding that a 15-min OR is optimal for individual stocks while a 30-min OR is optimal for index futures.
+
+**OR-width-based stop:**  
+Stop at OR low (LONG) / OR high (SHORT) is correct — it is the natural invalidation level. Fixed-percentage stops (0.5%) are uncorrelated with the actual volatility of the OR and produce worse results. The OR width already encodes the session opening volatility, making it a natural ATR proxy for this specific strategy.
+
+---
+
+### ATR-Trailing Exit: Findings
+
+**ATR-trailing at 1.5×ATR(14) underperforms the fixed 2×OR-width TP for this setup.**
+
+The OR width itself is a session-calibrated ATR proxy. Setting TP at 2×OR-width is therefore already an ATR-relative target, making the additional per-bar ATR computation redundant. The M15 ATR(14) is more variable and at 1.5× typically tighter than 2×OR-width, causing premature exits.
+
+| Approach | DE40 PF | UK100 PF | USDJPY PF |
+|---|---|---|---|
+| v2: 2×OR-width TP | **1.62** | **1.19** | **1.27** |
+| v3: 1.5×ATR trailing | 1.46 | 1.10 | 1.22 |
+
+**Recommendation:** Retain the fixed 2×OR-width TP as the primary target. If ATR-trailing is revisited, use a larger multiplier (≥ 3.0×) or combine: ATR trail as a floor, OR-width TP as a cap.
+
+---
+
+### Instrument Universe for ORB
+
+Based on backtests, the ORB strategy should be restricted to:
+- **DE40** — highest edge (PF 1.62); Xetra open is the cleanest structural event
+- **UK100** — clear edge (PF 1.19); LSE open
+- **USDJPY** — edge present (PF 1.27); tightest effective spread relative to OR width among FX pairs
+
+All other instruments in the current watchlist show no consistent ORB edge and should be excluded.
+
+---
+
+### Suggested Next Directions (ranked)
+
+1. **OR-width/ATR gate on DE40/UK100/USDJPY** — filter to only trade sessions where the OR width falls within a "normal" range (e.g., between 10th and 90th percentile for the instrument). Extreme OR widths (gap open days, news events) are associated with false breakouts, not continuation. Expected: reduce bad entries without reducing good ones.
+
+2. **Zarattini ITSM momentum as parallel strategy** — implement intraday time-series momentum (first 30-min bar direction predicts last 30-min bar direction, as per JFE 2018 Gao et al.) on US500/DE40/UK100. Directly addresses the near-zero US500 PF from ORB. Uses the M30 data now available from the in-process aggregation (`aggregate_bars(bars, 30)`).
+
+3. **True M30 bar data from MT5** — fetch M30 bars separately from MT5 on Windows (vs. aggregating M1). Separate M30 data enables the M30 directional gate for momentum that was self-defeating when computed from M1. This unlocks the EMA 9/21 momentum strategy at its correct resolution.
+
+4. **VWAP alignment pre-filter** — only enter ORB LONG when the bar breakout closes above session VWAP; SHORT when below. VWAP confirms that the institutional bias matches the ORB direction. Requires per-session VWAP computation in the engine.
+
+---
+
+### Sources (Phase 2)
+
+- Zarattini & Aziz (2024) — ORB edge documented on US equity index futures at 30-min OR resolution; Sharpe > 1.5
+- Gao, Han, Li & Zhou (2018, JFE) — intraday time-series momentum (ITSM); first-half-hour return predicts last-half-hour return, R² = 1.6–3.3% on S&P 500
+- Maróy (2020, *Algorithmic Trading*) — ATR-trailing stop as primary ORB exit mechanism; recommends 2–3×ATR multiplier for index futures

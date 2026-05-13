@@ -509,6 +509,30 @@ ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.3
 - **FX pairs (except USDJPY), crypto, and commodities remain unprofitable** — EURUSD/GBPUSD/EURGBP PF 0.44–0.80; BTCUSD PF 0.52. Wide spreads relative to typical OR width erode edge on instruments where the ORB structural advantage is weaker.
 - **XBRUSD borderline** — PF 1.06 but MaxDD 9.2%; not reliable.
 
+### 6.8 ORB v3 results (Jan–May 2026, M15, 2-bar OR, OR-width stop, ATR-trailing exit, DE40/UK100/USDJPY only)
+
+Improvements vs v2: (a) instrument universe restricted to confirmed-edge instruments; (b) fixed 2×OR-width TP replaced with ATR-trailing stop at 1.5×ATR(14) from bar high/low peak; TP set to 99× (effectively disabled).
+
+Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
+
+```
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
+--------  --------------  ------  ------  ------  -------  ------  -------  -------
+USDJPY    orb             70      31.4%   1.22    1.052    98.6%   5.0      -0.08R
+DE40      orb             71      47.9%   1.46    1.791    98.6%   4.91     +0.16R
+UK100     orb             70      35.7%   1.10    3.267    100.0%  4.84     +0.06R
+```
+
+**Reading the ORB v3 results:**
+
+- **Stop% 98–100%** — all exits are via hard stop, including ATR-ratcheted stops. With TP disabled, there are no take-profit exits by design; stop% is expected to be near 100%.
+- **DE40 win rate 47.9%** — improved significantly from v2 (39.4%). ATR trailing locks in gains before reversal, converting formerly-stopped trades into winners. However PF dropped (1.62 → 1.46) because each win is smaller (trade exits at ATR trail rather than at the full 2×OR-width TP target).
+- **UK100 and USDJPY slightly weaker** — PF 1.10 and 1.22 vs v2 (1.19 and 1.27). ATR trailing at 1.5×ATR is cutting winning trades too early on these instruments — the fixed 2×OR-width TP in v2 was a better target.
+- **Net verdict: v2 fixed-TP is still the best configuration.** The ATR multiplier of 1.5 is too tight. The fixed 2×OR-width TP works because the OR width is already an ATR proxy for the session open volatility.
+
+**Diagnostic — why ATR-trailing underperforms fixed TP here:**
+The OR width (defined over 30 min) already encodes the session opening volatility — it is effectively a session-calibrated ATR. Using the OR width as the TP distance is therefore a natural ATR-based target. The per-bar M15 ATR(14) is more variable and at 1.5× is tighter than the 2×OR-width target on most sessions, causing premature exits on what would have been full TP hits. A larger ATR multiplier (e.g. 3.0×) or a combined approach (ATR trail with OR-width TP as a floor) may recover the v2 edge while adding upside capture on large session moves.
+
 ---
 
 ## 7. Test Suite

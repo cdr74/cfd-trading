@@ -259,3 +259,24 @@ def test_main_no_bars_skips_gracefully(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "No results" in out or "skip" in out
+
+
+# ---------------------------------------------------------------------------
+# Instrument filter
+# ---------------------------------------------------------------------------
+
+def test_instrument_allowed_no_filter():
+    assert run_mod._instrument_allowed("EURUSD", {}) is True
+    assert run_mod._instrument_allowed("ANYTHING", {"risk": {}}) is True
+
+
+def test_instrument_allowed_with_list():
+    cfg = {"instruments": ["DE40", "UK100", "USDJPY"]}
+    assert run_mod._instrument_allowed("DE40", cfg) is True
+    assert run_mod._instrument_allowed("EURUSD", cfg) is False
+    assert run_mod._instrument_allowed("BTCUSD", cfg) is False
+
+
+def test_instrument_allowed_empty_list():
+    cfg = {"instruments": []}
+    assert run_mod._instrument_allowed("EURUSD", cfg) is False

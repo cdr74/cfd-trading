@@ -340,3 +340,66 @@ class TestMetrics:
         result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
         assert result.total_trades == 1
         assert "Hard stop" in result.trades[0].exit_reason
+
+
+class TestATRTrailing:
+    """ATR-trailing stop: trails at N×ATR(14) from bar high/low peak."""
+
+    @pytest.fixture
+    def atr_cfg(self):
+        return {
+            "risk": {
+                "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
+                "trailing_stop": {
+                    "enabled": True,
+                    "atr_multiplier": 1.5,
+                    "min_distance_pct": 0.5,
+                },
+                "take_profit": {"dynamic": False, "min_rr_ratio": 99},
+                "time_exit": {"enabled": False},
+            }
+        }
+
+    def test_atr_trailing_ratchets_above_initial_stop(self, atr_cfg):
+        # 21 flat + 1 spike → LONG at 1.10; price rises for 15 bars then gently falls.
+        # ATR trailing ratchets the stop well above the initial 2% hard stop (1.078).
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        rise_bars   = _bars([1.10 + i * 0.01 for i in range(1, 16)])  # 1.11..1.25
+        fall_bars   = _bars([1.25 - i * 0.002 for i in range(1, 40)])  # gentle fall
+        # Bump timestamps so bars are chronological after signal_bars
+        for j, b in enumerate(rise_bars + fall_bars):
+            object.__setattr__(b, "ts", (23 + j) * 60)
+        bars = signal_bars + [entry_bar] + rise_bars + fall_bars
+
+        result = run_backtest("EURUSD", "momentum", bars, atr_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        initial_hard_stop = trade.entry_price * (1 - 0.02)   # 2% below entry
+        # ATR trailing should ratchet stop above the initial 2% hard stop
+        assert trade.exit_price > initial_hard_stop
+
+    def test_atr_trailing_does_not_fire_before_price_moves(self, atr_cfg):
+        # LONG entry, then immediate crash — ATR trailing ratchet should not have moved
+        # stop above OR low since price never rose, so trade closes at entry-level stop.
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        crash_bar   = _bar(23 * 60, 0.50)
+        bars = signal_bars + [entry_bar, crash_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, atr_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert "Hard stop" in result.trades[0].exit_reason
+        assert result.trades[0].pnl_points < 0
+
+    def test_no_hard_tp_with_large_rr_ratio(self, atr_cfg):
+        # With min_rr_ratio=99, a 2× move should not trigger take-profit
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar   = _bar(22 * 60, 1.10)
+        tp_bar      = _bar(23 * 60, 2.20)   # 2× entry — TP at 99× stop won't be reached
+        eod_bar     = _bar(24 * 60, 2.20)
+        bars = signal_bars + [entry_bar, tp_bar, eod_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, atr_cfg, RISK_CFG)
+        assert result.total_trades == 1
+        assert "Take profit" not in result.trades[0].exit_reason

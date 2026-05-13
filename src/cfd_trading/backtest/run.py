@@ -58,6 +58,9 @@ def main() -> None:
     for strategy_name in strategies:
         strat = load_strategy(strategy_name, config_dir)
         for epic in epics:
+            if not _instrument_allowed(epic, strat.config):
+                print(f"  [skip] {epic}/{strategy_name} — not in strategy instrument list")
+                continue
             bars_m1 = get_bars(conn, epic, "M1")
             if not bars_m1:
                 print(f"  [skip] {epic}/{strategy_name} — no M1 bars in DB")
@@ -147,6 +150,16 @@ def _resolve_epics(args: argparse.Namespace, config_dir: Path) -> list[str]:
 def _load_risk(config_dir: Path) -> dict:
     with open(config_dir / "risk.yaml") as f:
         return yaml.safe_load(f)
+
+
+def _instrument_allowed(epic: str, config: dict) -> bool:
+    """Return True if the strategy config permits this epic.
+
+    Strategies can declare an `instruments` list at the top level of their YAML.
+    If present, only listed epics are traded.  If absent, all epics are allowed.
+    """
+    allowed = config.get("instruments")
+    return allowed is None or epic in allowed
 
 
 # ---------------------------------------------------------------------------

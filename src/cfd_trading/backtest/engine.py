@@ -5,11 +5,14 @@ Exit:   same evaluate_position() rule engine used by the live monitor
 Prices: local SQLite ohlc_bars — no Capital.com API calls
 """
 
+import copy
 from dataclasses import dataclass, field
 
 from cfd_trading.monitor.monitor import evaluate_position
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import MomentumSignalState, MeanReversionSignalState, ORBSignalState
+from cfd_trading.backtest.signals import (
+    MomentumSignalState, MeanReversionSignalState, ORBSignalState, _ADXState,
+)
 
 # Maps strategy name → state class.  A fresh instance is created per run.
 _SIGNAL_STATES: dict[str, type] = {
@@ -84,15 +87,38 @@ def run_backtest(
     rr_ratio = strategy_config["risk"]["take_profit"]["min_rr_ratio"]
     half = spread_pts / 2
 
+    # ATR-trailing setup: when atr_multiplier is configured, trail at N×ATR(14) from
+    # bar high/low peak.  evaluate_position's own trailing stop is disabled in this mode
+    # to avoid double-ratcheting; hard-stop and TP checks are preserved.
+    ts_config = strategy_config.get("risk", {}).get("trailing_stop", {})
+    atr_multiplier: float | None = ts_config.get("atr_multiplier")
+    _atr_tracker = _ADXState(period=14) if atr_multiplier else None
+    _peak_price: float | None = None
+
+    if atr_multiplier:
+        eval_config = copy.deepcopy(strategy_config)
+        eval_config["risk"]["trailing_stop"]["enabled"] = False
+    else:
+        eval_config = strategy_config
+
     completed: list[Trade] = []
     open_trade: Trade | None = None
     current_stop: float | None = None
 
     for i, bar in enumerate(bars):
-        # Always update signal state so EMAs stay current even while in a position
+        # Always update signal state and ATR tracker so indicators stay current
         signal = signal_state.update(bar)
+        if _atr_tracker:
+            _atr_tracker.update(bar)
 
         if open_trade is not None:
+            # Track bar high/low peak for ATR trailing
+            if _atr_tracker:
+                if open_trade.direction == "BUY":
+                    _peak_price = max(_peak_price if _peak_price is not None else bar.high, bar.high)
+                else:
+                    _peak_price = min(_peak_price if _peak_price is not None else bar.low, bar.low)
+
             # --- Manage open position ---
             price_data = {
                 "bid": bar.close - half,
@@ -104,7 +130,7 @@ def run_backtest(
                 "profitLevel": open_trade.take_profit,
             }
             action, reason, new_stop = evaluate_position(
-                position_dict, price_data, strategy_config
+                position_dict, price_data, eval_config
             )
 
             if action == "CLOSE":
@@ -116,10 +142,25 @@ def run_backtest(
                 completed.append(open_trade)
                 open_trade = None
                 current_stop = None
+                _peak_price = None
                 signal_state.notify_exit()
 
             elif action == "ADJUST" and new_stop is not None:
                 current_stop = new_stop
+
+            # ATR-trailing ratchet — applied after evaluate_position; only ratchets in
+            # the profitable direction, never widens the stop
+            if open_trade is not None and _atr_tracker and _peak_price is not None:
+                current_atr = _atr_tracker.atr
+                if current_atr:
+                    if open_trade.direction == "BUY":
+                        atr_candidate = round(_peak_price - atr_multiplier * current_atr, 5)
+                        if atr_candidate > current_stop:
+                            current_stop = atr_candidate
+                    else:
+                        atr_candidate = round(_peak_price + atr_multiplier * current_atr, 5)
+                        if atr_candidate < current_stop:
+                            current_stop = atr_candidate
 
             # Signal-based exit: check after evaluate_position so hard stop takes priority
             if open_trade is not None:
@@ -133,6 +174,7 @@ def run_backtest(
                     completed.append(open_trade)
                     open_trade = None
                     current_stop = None
+                    _peak_price = None
                     signal_state.notify_exit()
 
         else:
@@ -179,6 +221,7 @@ def run_backtest(
         open_trade.exit_reason = "End of data"
         open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
         completed.append(open_trade)
+        _peak_price = None
         signal_state.notify_exit()
 
     return _summarise(epic, strategy, completed, bars, stop_pct)
