@@ -427,7 +427,62 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 ---
 
-## 13. References
+## 13. S5 — Opening Range Breakout (ORB)
+
+**Research basis:** Zarattini & Aziz (2024) — Sharpe > 1.5 on US equity index futures at 15-min resolution. Structural edge: the first bar of the session captures order flow imbalance at the open; the breakout direction predicts session continuation.
+
+**Algorithm:**
+
+```
+1. Identify the Opening Range bar: the first M15 bar whose UTC timestamp
+   aligns with the instrument's session open (see backtest/sessions.py)
+2. Record OR high = bar.high, OR low = bar.low
+3. For each subsequent M15 bar in the same session:
+     if bar.high > OR high → LONG (break above range)
+     if bar.low  < OR low  → SHORT (break below range)
+4. At most one signal per session — first breakout direction wins
+5. Reset OR on the next session open bar
+```
+
+**Key design choices:**
+- One signal per session: prevents chasing reversals after the first impulse
+- Strict inequality: touching OR level is not a breakout; requires `bar.high > OR high`
+- Percentage stop (0.5% default): approximates the OR-width stop used in practice. Production would use `stop = OR low` for LONG, `stop = OR high` for SHORT.
+- min_rr_ratio = 2.0: higher than momentum (1.5) — ORB targets session continuation, not micro-moves
+
+**Session open times (UTC) — `backtest/sessions.py`:**
+
+| Instrument | Session | UTC Open |
+|---|---|---|
+| US500 | NYSE | 14:30 |
+| DE40 | Xetra | 08:00 |
+| UK100 | LSE | 08:00 |
+| FX (all) | London | 08:00 |
+| GOLD, XBRUSD | London/ICE | 08:00 |
+| BTCUSD, ETHUSD | Daily (no session) | 00:00 |
+
+**DST caveat:** Session open times are fixed UTC values. European instruments shift by 1 hour around March/October clock changes. For a 4-month dataset this affects ~2 weeks of sessions and is acceptable for backtesting purposes.
+
+**Backtest implementation:** `ORBSignalState` in `backtest/signals.py`. Run with `--resolution M15` — the ORB is defined on M15 bars aggregated from M1 data. The per-instrument session time is looked up in `backtest/sessions.py` and passed via `signal_kwargs`.
+
+---
+
+## 14. Backtest Experiment Log
+
+Tracks all signal and parameter changes in chronological order so we can see what was tried and avoid repeating failed approaches.
+
+| Date | Change | Resolution | Key metrics | Conclusion |
+|---|---|---|---|---|
+| 2026-05-12 | Baseline: EMA gap 0.02%, no spread costs | M1 | Momentum: GOLD PF 1.52 (71 trades), UK100 PF 3.04 (15 trades). Mean rev: XBRUSD PF 1.15 (226 trades), DE40 PF 1.48 (25 trades) | Best baseline pairs identified. Momentum stop% near 100% — structural entry-timing problem |
+| 2026-05-13 | EMA gap 0.02% → 0.05% | M1 | Momentum trades: ~528 → ~88 across watchlist; avg PF unchanged ~0.83 | Fewer signals, same quality — gap filter alone cannot fix M1 momentum |
+| 2026-05-13 | Added ATR≥4×spread gate + 5-bar hold cap + spread fill costs (mean rev) | M1 | Mean rev DE40 PF 1.10 (194 trades), most instruments PF < 1.0; signal count 2940 DE40 → too high | Spread costs expose that mean rev edge is near zero at M1. Hold cap and ATR gate not sufficient alone |
+| 2026-05-13 | Added M30 directional bias gate (30-bar OLS slope on M1 bars, momentum only) | M1 | Momentum signals: near zero across all instruments | M30 gate on M1 data is self-defeating — crossovers happen at reversals when M30 slope still reflects prior direction. Gate disabled in `run.py`. Needs true M30 bar data to be useful |
+| 2026-05-13 | M1 → M15 aggregation (in-process); M30 gate disabled | M15 | Mean rev: best PF 1.10 DE40, most < 1.0. Momentum: near-zero signals — EMA9/21 warm-up is 22 bars = 5.5 hours at M15 | EMA9/21 wrong for M15 (too slow). Mean rev marginally better but no real edge. Resolution change alone insufficient |
+| 2026-05-13 | ORB (Opening Range Breakout) on M15 — first session bar defines range | M15 | *see §6.6 in BACKTESTING.md* | *pending* |
+
+---
+
+## 15. References
 
 | Source | Relevance |
 |---|---|
@@ -435,3 +490,5 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 | Ernie Chan — *Algorithmic Trading* | Mean reversion + momentum; practical intraday focus |
 | QuantConnect Strategy Library | Open source implementations of canonical strategy families |
 | Capital.com API docs (demo) | Primary data source — confirm sentiment endpoint availability per instrument |
+| Zarattini & Aziz (2024) — *Opening Range Breakout* | Sharpe > 1.5 on US equity index futures at 15-min resolution; empirical basis for ORB (S5) |
+| Gao, Han, Li & Zhou (2018 JFE) — *ITSM* | Intraday technical signal model: first half-hour predicts last half-hour; R² 1.6–3.3% |

@@ -457,6 +457,37 @@ ETHUSD    momentum        5       40.0%   0.18    1.998    100.0%  0.5      -0.2
 
 *Conclusion — neither strategy is profitable at M15 as currently parameterised. The resolution change alone is not sufficient.*
 
+### 6.6 ORB results (Jan–May 2026, M15, stop=0.5%, TP=2×stop)
+
+Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
+
+```
+Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
+--------  --------------  ------  ------  ------  -------  ------  -------  -------
+EURUSD    orb             51      35.3%   1.09    3.016    90.2%   3.65     +0.03R
+GBPUSD    orb             57      31.6%   0.55    5.14     96.5%   4.08     -0.14R
+USDJPY    orb             55      29.1%   1.16    2.269    89.1%   3.93     +0.05R
+EURGBP    orb             24      29.2%   0.58    1.789    95.8%   1.71     -0.13R
+US500     orb             67      40.3%   0.90    6.057    89.6%   4.64     -0.04R
+DE40      orb             71      32.4%   0.82    5.922    88.7%   4.91     -0.08R
+UK100     orb             70      38.6%   0.94    5.193    92.9%   4.84     -0.02R
+GOLD      orb             73      28.8%   0.58    7.947    95.9%   4.93     -0.21R
+XBRUSD    orb             75      26.7%   0.49    19.554   90.7%   4.83     -0.45R
+BTCUSD    orb             71      25.4%   0.34    17.419   97.2%   7.03     -0.44R
+ETHUSD    orb             71      29.6%   0.59    12.499   91.5%   7.03     -0.25R
+```
+
+**Reading the ORB results:**
+
+- **Signal frequency correct** — 3.65–4.93 sig/wk maps to roughly 1 signal per trading session, which is exactly what ORB should produce. Session detection is working.
+- **Stop rate 88–97%** — almost every trade exits via hard stop, not take profit. The ORB breakout is being reversed before price reaches the 1.0% TP target.
+- **Win rates 25–40%** — with a 2:1 R:R the breakeven win rate is 33.3%. Only EURUSD (35.3%) and USDJPY (29.1%) are marginally positive PF; the latter shows PF > 1 despite low win rate because trailing stop captures occasional large winners.
+- **US indices are the best performers** — US500 (40.3% win), UK100 (38.6% win) — consistent with Zarattini & Aziz whose research specifically covers US equity index futures. Still not profitable here.
+- **Crypto and commodities are worst** — BTCUSD 25.4% / PF 0.34; XBRUSD 26.7% / PF 0.49. High spread relative to OR width eats entries.
+
+**Diagnostic — why stop rate is so high:**
+At M15, the OR is a single 15-min bar. One 15-min bar at DE40 might span 20–50 pts. A LONG breakout entry occurs at the OR high; with a 0.5% stop (≈ 90 pts on DE40 at 18,000), the stop is wide relative to the OR, but the TP at 1.0% (≈ 180 pts) requires a sustained session trend that does not consistently materialise from a single-bar OR. False breakouts — where price breaks above the OR high briefly before reversing — dominate the loss distribution.
+
 ---
 
 ## 7. Test Suite

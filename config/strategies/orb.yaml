@@ -1,0 +1,29 @@
+name: orb
+description: "Opening Range Breakout — first 15-min bar of session defines range; trade breakout above/below"
+
+entry:
+  min_size: 0.1
+  max_size: 5.0
+
+risk:
+  target_risk_pct: 1.0
+  stop_loss:
+    type: HARD
+    default_pct: 0.5
+    max_pct: 2.0
+  trailing_stop:
+    enabled: true
+    min_distance_pct: 0.3
+    max_distance_pct: 1.5
+    update_interval_min: 1
+  take_profit:
+    dynamic: true
+    min_rr_ratio: 2.0
+    max_pct: 10.0
+  position_scaling:
+    enabled: false
+    max_adds: 0
+    max_total_size: 5.0
+  time_exit:
+    enabled: true
+    close_minutes_before_session_end: 30

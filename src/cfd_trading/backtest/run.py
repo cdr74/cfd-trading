@@ -31,6 +31,7 @@ from cfd_trading.strategy.loader import load_strategy, list_strategies
 from cfd_trading.backtest.engine import run_backtest, BacktestResult
 from cfd_trading.backtest.spreads import spread_points
 from cfd_trading.backtest.aggregate import aggregate_bars
+from cfd_trading.backtest.sessions import session_open_utc
 
 _DEFAULT_DB_PATH = "/mnt/c/Users/chris/dev/trading-data/trading.db"
 _CONFIG_DIR = Path(os.getenv("CONFIG_DIR", str(Path(__file__).parents[3] / "config")))
@@ -67,6 +68,10 @@ def main() -> None:
             signal_kwargs: dict = {}
             if strategy_name == "momentum":
                 signal_kwargs["m30_gate"] = False
+            elif strategy_name == "orb":
+                hour, minute = session_open_utc(epic)
+                signal_kwargs["session_open_hour"] = hour
+                signal_kwargs["session_open_minute"] = minute
             result = run_backtest(epic, strategy_name, bars, strat.config, risk_config,
                                   spread_pts=sp, signal_kwargs=signal_kwargs)
             results.append(result)

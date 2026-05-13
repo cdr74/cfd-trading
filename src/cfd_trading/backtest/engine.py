@@ -9,12 +9,13 @@ from dataclasses import dataclass, field
 
 from cfd_trading.monitor.monitor import evaluate_position
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import MomentumSignalState, MeanReversionSignalState
+from cfd_trading.backtest.signals import MomentumSignalState, MeanReversionSignalState, ORBSignalState
 
 # Maps strategy name → state class.  A fresh instance is created per run.
 _SIGNAL_STATES: dict[str, type] = {
     "momentum": MomentumSignalState,
     "mean_reversion": MeanReversionSignalState,
+    "orb": ORBSignalState,
 }
 
 

@@ -12,6 +12,11 @@ each new bar in O(1) time.  Create a fresh instance per instrument/strategy run.
                              + ATR(14) ≥ 4× spread gate (skips low-vol entries)
                              + check_exit(): hold cap (max_hold_bars) then z-score midline
                              + notify_entry/notify_exit for hold-cap bar counting
+  ORBSignalState           — Opening Range Breakout on aggregated bars (designed for M15)
+                             First bar of each session defines OR high/low
+                             Break above OR high → LONG; break below OR low → SHORT
+                             One signal per session; resets on each new session open
+                             check_exit() → None; notify_entry/notify_exit are no-ops
 
 The functional wrappers (momentum_signal, mean_reversion_signal) are kept as
 conveniences for unit tests.  The backtest engine uses the stateful classes
@@ -357,6 +362,68 @@ class MeanReversionSignalState:
     def notify_exit(self) -> None:
         """Called by the engine immediately after a trade is closed."""
         self._bars_in_trade = None
+
+
+class ORBSignalState:
+    """Opening Range Breakout signal — designed for M15 aggregated bars.
+
+    The first bar of each session (identified by UTC timestamp alignment)
+    defines the Opening Range: its high and low are the reference levels.
+    Subsequent bars in the same session fire LONG when bar.high > OR high,
+    SHORT when bar.low < OR low.  At most one signal is fired per session.
+
+    session_open_hour / session_open_minute (UTC): identify the OR bar by
+    checking bar.ts % 86400 == session_open_hour * 3600 + session_open_minute * 60.
+
+    DST is not accounted for — see backtest/sessions.py for the caveat.
+    """
+
+    def __init__(
+        self,
+        session_open_hour: int = 8,
+        session_open_minute: int = 0,
+    ) -> None:
+        self._session_open_seconds = session_open_hour * 3600 + session_open_minute * 60
+        self._or_high: float | None = None
+        self._or_low:  float | None = None
+        self._session_day: int | None = None   # floor(ts / 86400) of the active session
+        self._traded: bool = False
+
+    def update(self, bar: OHLCBar) -> str | None:
+        """Consume one bar; return 'LONG', 'SHORT', or None."""
+        day = bar.ts // 86400
+        seconds_in_day = bar.ts % 86400
+
+        if seconds_in_day == self._session_open_seconds:
+            # Opening range bar — record range, reset for this session
+            self._or_high    = bar.high
+            self._or_low     = bar.low
+            self._session_day = day
+            self._traded      = False
+            return None  # OR bar is reference only, never an entry
+
+        if (
+            self._or_high is not None
+            and not self._traded
+            and self._session_day == day
+        ):
+            if bar.high > self._or_high:
+                self._traded = True
+                return "LONG"
+            if bar.low < self._or_low:
+                self._traded = True
+                return "SHORT"
+
+        return None
+
+    def check_exit(self) -> str | None:
+        return None
+
+    def notify_entry(self) -> None:
+        pass
+
+    def notify_exit(self) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------
