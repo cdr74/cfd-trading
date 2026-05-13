@@ -149,7 +149,11 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 
 **Implementation note:** EMA_9, EMA_21 are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). `signal_t` (EMA_9 − EMA_21) and trend slope are also returned. The normalised z_t (signal_t / rolling_std) is not yet computed — Claude reasons qualitatively over the gap instead.
 
-**Backtest signal note:** The deterministic backtest approximation (`backtest/signals.py`) adds a minimum EMA gap filter: the signal is suppressed if `|EMA_9 − EMA_21| / EMA_21 < 0.05%`. This guards against noise crossovers on M1 bars where the two EMAs are nearly identical (0.05% = 4 pts at 8,000 — 4× a typical 1-pt fixed spread; research-validated minimum for positive signal/cost ratio). The threshold is configurable via `_MIN_EMA_GAP_PCT` in `signals.py`.
+**Backtest signal note:** The deterministic backtest approximation (`backtest/signals.py`) adds three additional filters to the EMA crossover:
+
+- **EMA gap filter** — suppressed if `|EMA_9 − EMA_21| / EMA_21 < 0.05%`. Guards against noise crossovers (0.05% = 4 pts at 8,000 = 4× a 1-pt spread; research-validated minimum). Configurable via `_MIN_EMA_GAP_PCT`.
+- **ADX regime gate** — suppressed when `ADX(14) < 25` (non-trending market). Disable via `signal_kwargs={"adx_threshold": 0.0}`.
+- **M30 directional bias gate** — each M1 bar is appended to a rolling 30-bar buffer. When the buffer is full, OLS slope of the 30 closes defines the 30-min trend. LONG entries are blocked when the M30 trend is bearish; SHORT entries are blocked when M30 is bullish. Permissive while warming up (<30 bars). Disable via `signal_kwargs={"m30_gate": False}`.
 
 ### 5.3 Stop Loss & Take Profit Rules
 

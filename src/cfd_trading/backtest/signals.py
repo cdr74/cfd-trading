@@ -5,6 +5,7 @@ each new bar in O(1) time.  Create a fresh instance per instrument/strategy run.
 
   MomentumSignalState    — incremental EMA9/EMA21 crossover + gap filter + slope
                            + ADX(14) regime gate (suppressed when ADX < threshold)
+                           + M30 directional bias gate (blocks entries against 30-bar trend)
                            + notify_entry/notify_exit (no-ops; satisfy shared interface)
   MeanReversionSignalState — rolling 20-bar z-score threshold
                              + ADX(14) regime gate (suppressed when ADX >= threshold)
@@ -148,21 +149,30 @@ class MomentumSignalState:
     ADX regime gate: signal is suppressed when ADX < adx_threshold (non-trending
     market).  During ADX warm-up (ADX is None) the gate is permissive so that
     short test sequences and the first bars of a live run are unaffected.
+
+    M30 directional bias gate: each M1 bar is added to a rolling 30-bar buffer.
+    When the buffer is full (≥30 bars), OLS slope of the 30 closes defines the
+    M30 bias.  LONG entries are blocked when M30 is bearish; SHORT entries are
+    blocked when M30 is bullish.  Permissive while warming up (<30 bars).
+    Disable via m30_gate=False (e.g. signal_kwargs={"m30_gate": False}).
     """
 
     _ALPHA9  = 2.0 / (9  + 1)
     _ALPHA21 = 2.0 / (21 + 1)
     _MIN_BARS     = 22   # EMA21 seeds at bar 21; crossover needs one prior bar
     _SLOPE_WINDOW = 22   # cap slope window to same length
+    _M30_WINDOW   = 30   # bars in the M30 directional bias buffer
 
     def __init__(
         self,
         min_ema_gap_pct: float = _MIN_EMA_GAP_PCT,
         adx_period: int = 14,
         adx_threshold: float = 25.0,
+        m30_gate: bool = True,
     ) -> None:
         self._min_ema_gap_pct = min_ema_gap_pct
         self._adx_threshold   = adx_threshold
+        self._m30_gate        = m30_gate
         self._n: int = 0
         self._ema9:  float | None = None
         self._ema21: float | None = None
@@ -170,7 +180,8 @@ class MomentumSignalState:
         self._prev_ema21: float | None = None
         self._sum9  = 0.0
         self._sum21 = 0.0
-        self._slope_buf: deque[float] = deque(maxlen=self._SLOPE_WINDOW)
+        self._slope_buf: deque[float]   = deque(maxlen=self._SLOPE_WINDOW)
+        self._m30_buf:   deque[OHLCBar] = deque(maxlen=self._M30_WINDOW)
         self._adx_state = _ADXState(adx_period)
 
     def update(self, bar: OHLCBar) -> str | None:
@@ -178,6 +189,7 @@ class MomentumSignalState:
         close = bar.close
         self._n += 1
         self._slope_buf.append(close)
+        self._m30_buf.append(bar)
 
         adx = self._adx_state.update(bar)
 
@@ -220,9 +232,19 @@ class MomentumSignalState:
         crossed_long  = self._prev_ema9 <= self._prev_ema21 and self._ema9 > self._ema21
         crossed_short = self._prev_ema9 >= self._prev_ema21 and self._ema9 < self._ema21
 
+        # M30 directional bias gate — block entries against 30-bar trend
+        # Permissive while buffer has fewer than 30 bars (warm-up)
+        m30_bullish: bool | None = None
+        if self._m30_gate and len(self._m30_buf) >= self._M30_WINDOW:
+            m30_bullish = _trend_slope([b.close for b in self._m30_buf]) > 0
+
         if crossed_long and slope > 0:
+            if m30_bullish is not None and not m30_bullish:
+                return None
             return "LONG"
         if crossed_short and slope < 0:
+            if m30_bullish is not None and m30_bullish:
+                return None
             return "SHORT"
         return None
 

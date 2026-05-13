@@ -147,7 +147,7 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 ### 4.1 Momentum signal
 
-**Approximates:** EMA_9 crosses above/below EMA_21 with trend slope confirmation and ADX regime gate.
+**Approximates:** EMA_9 crosses above/below EMA_21 with trend slope confirmation, ADX regime gate, and M30 directional bias gate.
 
 **Minimum bars:** 22 (EMA_21 seeds at bar 21; crossover needs one prior bar). With ADX(14) enabled the effective warm-up is ~28 bars before the gate can actively suppress non-trending signals.
 
@@ -156,12 +156,15 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 ```
 1. Compute EMA_9 and EMA_21 incrementally (O(1) Wilder-style)
 2. Compute ADX(14) incrementally
-3. Suppress if ADX is valid AND ADX < adx_threshold (non-trending market)
-4. Suppress if EMA gap < min_ema_gap_pct (noise crossover)
-5. Compute linear trend slope over the last 22 bars
-6. LONG  if EMA_9 crossed above EMA_21 AND slope > 0
-7. SHORT if EMA_9 crossed below EMA_21 AND slope < 0
-8. None otherwise
+3. Append bar to rolling 30-bar M30 buffer
+4. Suppress if ADX is valid AND ADX < adx_threshold (non-trending market)
+5. Suppress if EMA gap < min_ema_gap_pct (noise crossover)
+6. Compute linear trend slope over the last 22 bars
+7. LONG  if EMA_9 crossed above EMA_21 AND slope > 0
+       AND (M30 buffer not full OR M30 slope > 0)
+8. SHORT if EMA_9 crossed below EMA_21 AND slope < 0
+       AND (M30 buffer not full OR M30 slope < 0)
+9. None otherwise
 ```
 
 **Key detail — ADX regime gate:** Signal is suppressed when ADX(14) < 25 (default threshold). On M1 bars this detects whether the last 14 minutes are directionally trending. Passes unconditionally while ADX is warming up (first ~28 bars) to avoid missing early-session signals. Configurable via `signal_kwargs={"adx_threshold": value}` — set to `0.0` to disable entirely.
@@ -172,6 +175,8 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Key detail — slope window:** Slope computed over a fixed **22-bar window**, not unbounded history.
 
+**Key detail — M30 directional bias gate:** Each M1 bar is appended to a rolling 30-bar buffer. When the buffer reaches 30 bars, OLS slope of those closes defines the 30-bar (≈30-min) trend direction. LONG entries are blocked when the M30 trend is bearish; SHORT entries are blocked when M30 is bullish. Permissive while the buffer is warming up (<30 bars). Disable via `signal_kwargs={"m30_gate": False}`.
+
 **Indicator formulas:**
 
 ```
@@ -179,6 +184,7 @@ EMA(period) = SMA(first period bars) then α×price + (1−α)×prev_ema  where 
 ADX(14)     = Wilder-smoothed DX over 14 bars; DX = |+DI − −DI| / (+DI + −DI) × 100
 slope       = OLS regression coefficient of close prices over the last 22 bars
 gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.05% to fire)
+m30_bullish = OLS slope of the last 30 closes > 0
 ```
 
 **`check_exit()`:** Always returns `None` — momentum exits are handled entirely by `evaluate_position()` (trailing stop, take profit, hard stop).
@@ -528,6 +534,7 @@ Tests for `backtest/engine.py`:
 | `TestADXGate` | `test_momentum_suppressed_when_adx_below_threshold`, `test_momentum_fires_when_adx_gate_disabled`, `test_momentum_suppressed_by_high_explicit_threshold`, `test_mean_reversion_fires_in_flat_market`, `test_mean_reversion_suppressed_in_trending_market` |
 | `TestATRGate` | `test_gate_blocks_when_spread_large_relative_to_atr`, `test_gate_disabled_when_spread_zero`, `test_gate_permissive_while_atr_warming_up` |
 | `TestHoldCap` | `test_hold_cap_fires_after_max_bars`, `test_hold_cap_not_triggered_before_max_bars`, `test_hold_cap_cleared_after_notify_exit`, `test_hold_cap_priority_over_z_score_midline` |
+| `TestM30Gate` | `test_gate_passes_long_when_m30_bullish`, `test_gate_blocks_long_when_m30_bearish`, `test_gate_disabled_when_m30_gate_false`, `test_gate_blocks_short_when_m30_bullish`, `test_gate_permissive_during_warmup` |
 | `TestCheckExit` | `test_mean_reversion_check_exit_none_before_window_full`, `test_mean_reversion_check_exit_none_when_z_large`, `test_mean_reversion_check_exit_fires_when_z_small`, `test_momentum_check_exit_always_none` |
 
 ### 7.4a `tests/unit/test_spreads.py` (8 tests)
@@ -571,11 +578,11 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (233 tests)
+# Full unit suite (238 tests)
 pytest tests/unit/ -v
 ```
 
-All 233 unit tests pass with no network access or real DB file.
+All 238 unit tests pass with no network access or real DB file.
 
 ---
 

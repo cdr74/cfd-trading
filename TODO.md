@@ -282,19 +282,12 @@ These improvements address the three cost/edge issues identified in research.
   - `run.py`: imports `spread_points`, computes per-epic spread from `bars[0].close`, passes to engine.
   - 18 new unit tests (233 total). `test_spreads.py` (8), `TestATRGate` (3), `TestHoldCap` (4), engine spread/hold cap tests (4 new + 1 updated).
 
-- [ ] **Step 3 — 30-min directional bias signal (ITSM architecture)**
-  - M1 EMA crossover used as precise entry trigger; 30-min structure provides directional bias. Block entries that contradict M30 direction.
-  - **Design questions for next session:**
-    - **Q1 — How to derive M30 signal from M1 bars?**
-      - (a) In-engine rolling 30-bar OHLC aggregate built from the M1 bar stream (no new DB tables, O(n), pure Python). Downsides: open/high/low aggregation adds logic; partial first window.
-      - (b) Fetch M30 bars from MT5 separately and store in `ohlc_bars` with `resolution='M30'`. Cleaner but requires a second fetch pass and extra DB rows.
-      - (c) Use the 50-EMA (50-bar on M1 ≈ 50 min) as a simpler M30 proxy — already warm in `MomentumSignalState`. No new aggregation. Less theoretically pure but zero added complexity.
-    - **Q2 — What defines M30 "bullish"?**
-      - (a) Last complete 30-bar aggregate: close > open (simple, direct)
-      - (b) Price above a SMA/EMA of the aggregated M30 closes (smooths noise)
-      - (c) Slope of last 30 M1 closes (already computed in momentum state — zero added work)
-    - **Q3 — Gate strength:** Hard gate (block all entries against M30 direction) or soft gate (allow with reduced size)?
-    - **Key constraint:** M30 signal is an entry filter only. Stop loss configuration and position management rules unchanged.
+- [x] **Step 3 — 30-min directional bias signal (ITSM architecture)**
+  - Rolling 30-bar M1 buffer in `MomentumSignalState._m30_buf` (deque maxlen=30).
+  - M30 bullish/bearish defined by OLS slope of the 30 closes (`_trend_slope`).
+  - Hard gate: LONG blocked when M30 bearish; SHORT blocked when M30 bullish.
+  - Permissive while buffer warming up (<30 bars). Disable via `signal_kwargs={"m30_gate": False}`.
+  - 5 new unit tests in `TestM30Gate` (238 total).
 
 ---
 

@@ -378,6 +378,63 @@ class TestMomentumSignalState:
             assert state.update(bar) is None
 
 
+class TestM30Gate:
+    """M30 directional bias gate for MomentumSignalState.
+
+    Sequences are designed so the crossover falls within the same 30-bar window
+    used for M30 slope, so the two effects can be tuned independently.
+
+    LONG crossover reference sequence: [1.0]*29 + [1.30]
+      - 29 flat bars → both EMAs converge to 1.0, prev_ema9=prev_ema21
+      - bar 30 spike → EMA9 jumps above EMA21 (LONG crossover)
+      - M30 slope: 29×1.0 then 1.30 → positive (bullish)
+
+    Bearish-M30 LONG sequence: [1.1]*10 + [1.0]*20 + [1.30] (31 bars)
+      - Same LONG crossover at bar 31
+      - M30 (last 30 bars): 9×1.1 + 20×1.0 + 1×1.30 → slope negative (bearish)
+
+    SHORT crossover sequence: rising 0.9→0.984 (29 bars) then drop to 0.70
+      - Rising prices → EMA9 > EMA21 going in; drop creates SHORT crossover
+      - M30 slope: rising portion dominates → positive (bullish)
+    """
+
+    def test_gate_passes_long_when_m30_bullish(self):
+        # [1.0]*29 + [1.30]: M30 slope positive (bullish) → LONG passes
+        state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
+        for bar in _bars([1.0] * 29 + [1.30]):
+            result = state.update(bar)
+        assert result == "LONG"
+
+    def test_gate_blocks_long_when_m30_bearish(self):
+        # [1.1]*10 + [1.0]*20 + [1.30]: M30 slope negative (bearish) → LONG blocked
+        state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
+        for bar in _bars([1.1] * 10 + [1.0] * 20 + [1.30]):
+            result = state.update(bar)
+        assert result is None
+
+    def test_gate_disabled_when_m30_gate_false(self):
+        # Same bearish-M30 sequence but gate off → LONG fires
+        state = MomentumSignalState(adx_threshold=0.0, m30_gate=False)
+        for bar in _bars([1.1] * 10 + [1.0] * 20 + [1.30]):
+            result = state.update(bar)
+        assert result == "LONG"
+
+    def test_gate_blocks_short_when_m30_bullish(self):
+        # Rising 0.9→0.984 then drop to 0.70: M30 slope positive (bullish) → SHORT blocked
+        closes = [0.9 + i * 0.003 for i in range(29)] + [0.70]
+        state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
+        for bar in _bars(closes):
+            result = state.update(bar)
+        assert result is None
+
+    def test_gate_permissive_during_warmup(self):
+        # Only 22 bars total — M30 buffer not full (<30) → gate permissive → LONG fires
+        state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
+        for bar in _flat_then_spike(21, 1.0, 1.10):
+            result = state.update(bar)
+        assert result == "LONG"
+
+
 class TestMeanReversionSignalState:
 
     def test_fires_on_correct_bar(self):
