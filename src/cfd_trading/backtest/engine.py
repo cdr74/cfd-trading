@@ -28,14 +28,21 @@ class Trade:
     strategy: str
     direction: str          # "BUY" or "SELL"
     entry_ts: int
-    entry_price: float
+    entry_price: float      # fill price — includes half-spread
     stop_loss: float
     take_profit: float
     exit_ts: int | None = None
-    exit_price: float | None = None
+    exit_price: float | None = None   # fill price — includes half-spread
     exit_reason: str | None = None
-    pnl_points: float | None = None
-    risk_pts: float | None = None   # actual stop distance in price units; used for per-trade AvgR
+    pnl_points: float | None = None   # net of spread (derived from fills)
+    risk_pts: float | None = None     # actual stop distance in price units; used for per-trade AvgR
+    # Audit fields — used by trade-log persistence and Phase A audit slicing.
+    # Allow gross-vs-net cost decomposition: pnl_points uses fills,
+    # (exit_mid − entry_mid) gives the spread-free move.
+    entry_mid: float | None = None    # next_bar.open before _entry_fill applies half-spread
+    exit_mid: float | None = None     # bar.close before _exit_fill applies half-spread
+    spread_at_entry: float | None = None  # spread_pts in effect when the entry was filled
+    resolution: str | None = None     # bar resolution this trade was generated at, e.g. "M1", "M15"
 
 
 @dataclass
@@ -143,6 +150,7 @@ def run_backtest(
             if action == "CLOSE":
                 exit_fill = _exit_fill(open_trade.direction, bar.close, half)
                 open_trade.exit_ts = bar.ts
+                open_trade.exit_mid = bar.close
                 open_trade.exit_price = exit_fill
                 open_trade.exit_reason = reason
                 open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
@@ -175,6 +183,7 @@ def run_backtest(
                 if exit_reason:
                     exit_fill = _exit_fill(open_trade.direction, bar.close, half)
                     open_trade.exit_ts = bar.ts
+                    open_trade.exit_mid = bar.close
                     open_trade.exit_price = exit_fill
                     open_trade.exit_reason = exit_reason
                     open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)
@@ -189,7 +198,8 @@ def run_backtest(
             if signal is not None and i + 1 < len(bars):
                 next_bar = bars[i + 1]
                 direction = "BUY" if signal == "LONG" else "SELL"
-                fill_price = _entry_fill(direction, next_bar.open, half)
+                entry_mid = next_bar.open
+                fill_price = _entry_fill(direction, entry_mid, half)
 
                 # Use OR-width-based levels when the signal state provides them
                 if hasattr(signal_state, "get_entry_levels"):
@@ -215,6 +225,8 @@ def run_backtest(
                     stop_loss=stop_level,
                     take_profit=profit_level,
                     risk_pts=risk_pts,
+                    entry_mid=entry_mid,
+                    spread_at_entry=spread_pts,
                 )
                 current_stop = stop_level
                 signal_state.notify_entry()
@@ -224,6 +236,7 @@ def run_backtest(
         last = bars[-1]
         exit_fill = _exit_fill(open_trade.direction, last.close, half)
         open_trade.exit_ts = last.ts
+        open_trade.exit_mid = last.close
         open_trade.exit_price = exit_fill
         open_trade.exit_reason = "End of data"
         open_trade.pnl_points = _pnl(open_trade.direction, open_trade.entry_price, exit_fill)

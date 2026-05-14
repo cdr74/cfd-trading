@@ -449,3 +449,78 @@ class TestATRTrailing:
         result = run_backtest("EURUSD", "momentum", bars, atr_cfg, RISK_CFG)
         assert result.total_trades == 1
         assert "Take profit" not in result.trades[0].exit_reason
+
+
+# ---------------------------------------------------------------------------
+# Audit fields — entry_mid, exit_mid, spread_at_entry, resolution
+# These power the Phase A audit's gross-vs-net cost decomposition.
+# ---------------------------------------------------------------------------
+
+class TestAuditFields:
+
+    def test_entry_mid_is_next_bar_open_not_fill(self, momentum_cfg):
+        # Verify entry_mid is the un-spread-adjusted price.
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        flat_bar = _bar(23 * 60, 1.10)
+        bars = signal_bars + [entry_bar, flat_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        trade = result.trades[0]
+        assert trade.entry_mid == pytest.approx(1.10, rel=1e-6)
+        assert trade.entry_price == pytest.approx(1.15, rel=1e-6)  # mid + half-spread
+        # Half-spread is recoverable as the difference.
+        assert trade.entry_price - trade.entry_mid == pytest.approx(0.05, rel=1e-6)
+
+    def test_exit_mid_is_bar_close_not_fill(self, momentum_cfg):
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        flat_bar = _bar(23 * 60, 1.10)
+        bars = signal_bars + [entry_bar, flat_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        trade = result.trades[0]
+        # exit_mid is the bar.close that the engine saw at exit time.
+        assert trade.exit_mid is not None
+        # exit_price applies half-spread in the closing direction (BUY exits at bid = mid - half).
+        assert trade.exit_price == pytest.approx(trade.exit_mid - 0.05, rel=1e-6)
+
+    def test_spread_at_entry_is_recorded(self, momentum_cfg):
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        assert result.trades[0].spread_at_entry == pytest.approx(0.10, rel=1e-6)
+
+    def test_zero_spread_records_zero(self, momentum_cfg):
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)  # default spread_pts=0
+        trade = result.trades[0]
+        assert trade.spread_at_entry == 0.0
+        # No spread → entry_mid == entry_price.
+        assert trade.entry_mid == pytest.approx(trade.entry_price, rel=1e-6)
+        assert trade.exit_mid == pytest.approx(trade.exit_price, rel=1e-6)
+
+    def test_resolution_default_is_none_when_engine_called_directly(self, momentum_cfg):
+        # The engine never sets resolution — run.py stamps it after the fact.
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
+        assert result.trades[0].resolution is None
+
+    def test_gross_net_decomposition_recoverable(self, momentum_cfg):
+        # With recorded mids and spread, gross P&L is (exit_mid - entry_mid)
+        # for BUY trades, and the cost is the full spread paid.
+        signal_bars = _bars([1.0] * 21 + [1.10])
+        entry_bar = _bar(22 * 60, 1.10)
+        up_bar = _bar(23 * 60, 1.12)
+        eod_bar = _bar(24 * 60, 1.12)
+        bars = signal_bars + [entry_bar, up_bar, eod_bar]
+
+        result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
+                              spread_pts=0.10)
+        trade = result.trades[0]
+        gross_pnl = trade.exit_mid - trade.entry_mid       # 1.12 - 1.10 = 0.02
+        cost = trade.spread_at_entry                        # 0.10 (full spread)
+        net_pnl_recovered = gross_pnl - cost
+        assert net_pnl_recovered == pytest.approx(trade.pnl_points, rel=1e-6)

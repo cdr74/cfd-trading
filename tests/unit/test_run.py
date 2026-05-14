@@ -91,9 +91,65 @@ def test_resolve_epics_single():
 def test_resolve_epics_all(tmp_path):
     wl = tmp_path / "watchlist.yaml"
     wl.write_text("forex:\n  - EURUSD\n  - GBPUSD\ncrypto:\n  - BTCUSD\n")
-    args = argparse.Namespace(all_epics=True)
+    args = argparse.Namespace(all_epics=True, instruments=None)
     result = run_mod._resolve_epics(args, tmp_path)
     assert result == ["EURUSD", "GBPUSD", "BTCUSD"]
+
+
+def test_resolve_epics_instruments_subset(tmp_path):
+    wl = tmp_path / "watchlist.yaml"
+    wl.write_text("forex:\n  - EURUSD\n  - GBPUSD\nindices:\n  - US500\n  - DE40\n")
+    args = argparse.Namespace(all_epics=False, instruments="GBPUSD,US500")
+    result = run_mod._resolve_epics(args, tmp_path)
+    assert result == ["GBPUSD", "US500"]
+
+
+def test_resolve_epics_instruments_rejects_unknown(tmp_path):
+    wl = tmp_path / "watchlist.yaml"
+    wl.write_text("forex:\n  - EURUSD\n")
+    args = argparse.Namespace(all_epics=False, instruments="EURUSD,FAKEEPIC")
+    with pytest.raises(ValueError, match="Unknown instruments"):
+        run_mod._resolve_epics(args, tmp_path)
+
+
+def test_resolve_epics_instruments_trims_whitespace(tmp_path):
+    wl = tmp_path / "watchlist.yaml"
+    wl.write_text("forex:\n  - EURUSD\n  - GBPUSD\n")
+    args = argparse.Namespace(all_epics=False, instruments=" EURUSD , GBPUSD ")
+    result = run_mod._resolve_epics(args, tmp_path)
+    assert result == ["EURUSD", "GBPUSD"]
+
+
+# ---------------------------------------------------------------------------
+# _build_signal_kwargs
+# ---------------------------------------------------------------------------
+
+def test_build_signal_kwargs_momentum_default():
+    args = argparse.Namespace(momentum_relaxed=False)
+    kw = run_mod._build_signal_kwargs("momentum", args, "EURUSD")
+    assert kw == {"m30_gate": False}
+
+
+def test_build_signal_kwargs_momentum_relaxed():
+    args = argparse.Namespace(momentum_relaxed=True)
+    kw = run_mod._build_signal_kwargs("momentum", args, "EURUSD")
+    assert kw["m30_gate"] is False
+    assert kw["adx_threshold"] == 20.0
+    assert kw["min_ema_gap_pct"] == 0.0002
+
+
+def test_build_signal_kwargs_orb_passes_session_open():
+    args = argparse.Namespace(momentum_relaxed=False)
+    kw = run_mod._build_signal_kwargs("orb", args, "US500")
+    # US500 RTH open = 14:30 UTC (per sessions.py)
+    assert kw["session_open_hour"] == 14
+    assert kw["session_open_minute"] == 30
+
+
+def test_build_signal_kwargs_mean_reversion_empty():
+    args = argparse.Namespace(momentum_relaxed=False)
+    kw = run_mod._build_signal_kwargs("mean_reversion", args, "EURUSD")
+    assert kw == {}
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +336,84 @@ def test_instrument_allowed_with_list():
 def test_instrument_allowed_empty_list():
     cfg = {"instruments": []}
     assert run_mod._instrument_allowed("EURUSD", cfg) is False
+
+
+# ---------------------------------------------------------------------------
+# Trade-log Parquet output
+# ---------------------------------------------------------------------------
+
+def _make_trade(epic="EURUSD", strategy="momentum", entry_ts=1_700_000_000, **overrides):
+    from cfd_trading.backtest.engine import Trade
+    base = dict(
+        epic=epic,
+        strategy=strategy,
+        direction="BUY",
+        entry_ts=entry_ts,
+        entry_price=1.10,
+        stop_loss=1.078,
+        take_profit=1.133,
+        exit_ts=entry_ts + 600,
+        exit_price=1.12,
+        exit_reason="Take profit",
+        pnl_points=0.02,
+        risk_pts=0.022,
+        entry_mid=1.099,
+        exit_mid=1.1205,
+        spread_at_entry=0.002,
+        resolution="M15",
+    )
+    base.update(overrides)
+    return Trade(**base)
+
+
+def test_write_trade_log_creates_parquet(tmp_path):
+    import pyarrow.parquet as pq
+
+    trades = [_make_trade(), _make_trade(strategy="mean_reversion", entry_ts=1_700_001_000)]
+    result = BacktestResult(
+        epic="EURUSD", strategy="momentum",
+        total_trades=2, winning_trades=2,
+        win_rate=1.0, profit_factor=2.0,
+        max_drawdown_pct=0.0, stop_out_rate=0.0,
+        signal_frequency=1.0, trades=trades,
+    )
+    out = tmp_path / "trades.parquet"
+    run_mod._write_trade_log([result], str(out))
+
+    assert out.exists()
+    table = pq.read_table(out)
+    assert table.num_rows == 2
+    expected_cols = {"epic", "strategy", "direction", "entry_ts", "entry_price",
+                     "stop_loss", "take_profit", "exit_ts", "exit_price",
+                     "exit_reason", "pnl_points", "risk_pts",
+                     "entry_mid", "exit_mid", "spread_at_entry", "resolution"}
+    assert expected_cols.issubset(set(table.column_names))
+
+
+def test_write_trade_log_creates_parent_dirs(tmp_path):
+    trades = [_make_trade()]
+    result = BacktestResult(
+        epic="EURUSD", strategy="momentum",
+        total_trades=1, winning_trades=1,
+        win_rate=1.0, profit_factor=2.0,
+        max_drawdown_pct=0.0, stop_out_rate=0.0,
+        signal_frequency=1.0, trades=trades,
+    )
+    nested = tmp_path / "a" / "b" / "trades.parquet"
+    run_mod._write_trade_log([result], str(nested))
+    assert nested.exists()
+
+
+def test_write_trade_log_empty_results(tmp_path, capsys):
+    empty_result = BacktestResult(
+        epic="EURUSD", strategy="momentum",
+        total_trades=0, winning_trades=0,
+        win_rate=0.0, profit_factor=0.0,
+        max_drawdown_pct=0.0, stop_out_rate=0.0,
+        signal_frequency=0.0, trades=[],
+    )
+    out = tmp_path / "trades.parquet"
+    run_mod._write_trade_log([empty_result], str(out))
+
+    assert not out.exists()
+    assert "No trades to write" in capsys.readouterr().out

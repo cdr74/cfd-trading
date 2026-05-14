@@ -294,7 +294,23 @@ These improvements address the three cost/edge issues identified in research.
   - `backtest/aggregate.py`: `aggregate_bars(bars, period_minutes)` — groups M1 bars by UTC time bucket, merges OHLC. Handles M5/M15/M30/M60.
   - `run.py`: always fetches M1 from DB, aggregates to `--resolution` target in-process. M30 gate disabled for all resolutions pending true M30 data.
   - 15 new unit tests in `test_aggregate.py` (253 total).
-  - **Next:** run `--all-strategies --all-epics --resolution M15` and assess results.
+  - Done: ran `--all-strategies --all-epics --resolution M15`. Results flat-to-negative across all 11 instruments × 3 strategies → triggered the audit phase.
+
+### 10.8 Audit instrumentation (added 2026-05-14)
+
+Trade-log persistence and gross-vs-net audit fields, added to support
+Phase A of `/AUDIT_PLAN.md`. Source of truth for the audit work is
+`/AUDIT_PLAN.md` and `/audit/A1_inventory.md`, **not** this file.
+
+- [x] `Trade` dataclass gains `entry_mid`, `exit_mid`, `spread_at_entry`, `resolution` — enables gross-vs-net cost decomposition. Engine populates the first three; `run.py` stamps `resolution` after engine returns.
+- [x] `run.py --output PATH` writes one Parquet file per run via `_write_trade_log`. `pyarrow>=16.0` added to runtime deps.
+- [x] Stale BACKTESTING.md §9.2 fixed — code does deduct spread; doc had said otherwise.
+- [x] Unit tests: `TestAuditFields` in `test_engine.py` (6 tests) and 3 parquet-writer tests in `test_run.py`. **302 passing.**
+- [x] First augmented run: `/audit/trades_M15.parquet` (2,756 trades).
+
+> **Forward work moves to `/AUDIT_PLAN.md`.** The audit owns timeframe,
+> universe, and strategy decisions from here; this TODO file is now
+> historical for the implementation phases.
 
 ---
 

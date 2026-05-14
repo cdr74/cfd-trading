@@ -73,16 +73,43 @@ WSL2 (cfd-trading package)
 
 `backtest/fetch_ohlc.py` runs on Windows Python (not WSL2) because MetaTrader 5 uses Windows IPC.
 
+**Resolutions supported:** `M1`, `M15`, `H1` via `--resolution` (default `M1`).
+The MT5 server retains coarser resolutions for far longer than M1; see
+`probe_history.py` to inspect the actual depth.
+
+**Usage:**
+
+```cmd
+:: M1 initial load (4×30-day windows)
+python fetch_ohlc.py --mode bulk
+
+:: Native M15 across 3 years
+python fetch_ohlc.py --mode bulk --resolution M15 --years 3
+
+:: Native H1 across 6 years
+python fetch_ohlc.py --mode bulk --resolution H1 --years 6
+
+:: Restrict to an audit universe
+python fetch_ohlc.py --mode bulk --resolution M15 --years 3 ^
+    --instruments EURUSD,GBPUSD,USDJPY,EURGBP,US500,DE40,UK100,GOLD
+```
+
 **MT5 constraints (empirically verified):**
 
 | Constraint | Value |
 |------------|-------|
-| API method | `copy_rates_range(symbol, mt5.TIMEFRAME_M1, from_dt, to_dt)` |
-| Max window per call | 60 days at M1 resolution |
+| API method | `copy_rates_range(symbol, timeframe, from_dt, to_dt)` |
 | Per-call row cap | ~100,000 rows (MT5 silently truncates) |
-| History depth | ~3 months (earliest Capital.com data ≈ day -120) |
-| Bulk fetch strategy | 4 × 30-day windows per instrument (30 days × 1440 min ≈ 43,200 rows — safely under cap) |
+| M1 history depth | ~14 weeks on Capital.com demo (4×30-day windows) |
+| M15 history depth | ~2.5 years on most instruments (yearly chunks; older chunks may legitimately return 0) |
+| H1 history depth | ~5 years on most instruments (yearly chunks) |
 | Incremental update | 1 call per instrument (yesterday → today) |
+
+**Why yearly chunks for M15/H1:** a single deep `copy_rates_range` whose
+`from_dt` predates available data returns `(-2, "Invalid params")` instead
+of empty rows. Yearly chunks sidestep this — earliest chunks may return 0
+("predates history") cleanly while later chunks succeed. The script logs
+these as info, not warnings.
 
 **Symbol map** — two instruments use different names in MT5 vs the watchlist:
 
@@ -137,6 +164,24 @@ bars = get_bars(conn, "GOLD", "M1", from_ts=1_700_000_000)  # from timestamp
 ```
 
 `get_bars()` always returns bars in chronological order (ascending `ts`).
+
+### 3.5 Native-history probe (Windows-side)
+
+`backtest/probe_history.py` queries MT5 for the deepest available bar at
+H1, M15, and M1 per instrument. Used to decide whether the backtest
+window can be extended beyond the current ~14 weeks by switching to a
+higher native resolution. Runs on Windows Python (same IPC constraint as
+`fetch_ohlc.py`).
+
+```cmd
+python probe_history.py
+python probe_history.py --years 5 --csv probe.csv
+```
+
+Output is a per-(epic, resolution) earliest-bar table. Higher
+resolutions (H1, M15) typically expose substantially more history than
+M1 because brokers retain coarser bars longer. Phase A6 of the audit
+plan keys off the result.
 
 ---
 
@@ -331,7 +376,20 @@ Spread values come from `backtest/spreads.py` (Capital.com typical mid-session v
 | `avg_r` | `float` | Expectancy per trade in R-multiples: `net_pnl_pts / (n × avg_entry × stop_pct)` |
 | `trades` | `list[Trade]` | Full trade-level detail |
 
-Each `Trade` record contains: `epic`, `strategy`, `direction` (BUY/SELL), `entry_ts`, `entry_price`, `stop_loss`, `take_profit`, `exit_ts`, `exit_price`, `exit_reason`, `pnl_points`.
+Each `Trade` record contains:
+
+| Field | Description |
+|---|---|
+| `epic`, `strategy`, `direction` | identification |
+| `entry_ts`, `exit_ts` | UTC seconds |
+| `entry_price`, `exit_price` | fill prices — **include half-spread** in the appropriate direction |
+| `stop_loss`, `take_profit` | levels at time of entry |
+| `exit_reason` | e.g. `Hard stop`, `Take profit`, `Z-score midline`, `End of data` |
+| `pnl_points` | **net** of spread (derived from fills) |
+| `risk_pts` | actual stop distance in price units; used for per-trade AvgR |
+| `entry_mid`, `exit_mid` | un-spread-adjusted prices (`next_bar.open` at entry, `bar.close` at exit). Together with `spread_at_entry` allows gross-vs-net cost decomposition: `gross = exit_mid − entry_mid` (BUY) or `entry_mid − exit_mid` (SELL); `net = gross − spread_at_entry` |
+| `spread_at_entry` | the `spread_pts` value used to adjust the entry fill |
+| `resolution` | bar resolution this trade was generated at (stamped by `run.py`, not the engine) |
 
 ---
 
@@ -366,7 +424,11 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 | `--all-epics` | Run all instruments from `config/watchlist.yaml` |
 | `--strategy NAME` | Run a single strategy (mutually exclusive with `--all-strategies`) |
 | `--all-strategies` | Run all strategies discovered in `config/strategies/` (excludes `_base` and `scan`) |
-| `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60` (default: `M1`). M1 bars are always fetched from DB; higher resolutions are aggregated in-process via `backtest/aggregate.py`. |
+| `--instruments LIST` | Comma-separated subset of watchlist epics (mutually exclusive with `--epic` and `--all-epics`). Used for audit runs on a trimmed universe. Errors if any name is not in `config/watchlist.yaml`. Example: `EURUSD,GBPUSD,US500,DE40,GOLD`. |
+| `--resolution` | Target bar resolution strategies execute against: `M1` `M5` `M15` `M30` `M60` (default: `M1`). Bars are aggregated to this from `--source-resolution` if the two differ. |
+| `--source-resolution` | Resolution of bars read from the DB (default: `M1`). Set to match `--resolution` to skip aggregation when native bars are stored at the target resolution (e.g. native M15 from MT5). |
+| `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for Phase A audit slicing — see `AUDIT_PLAN.md` and `/audit/A1_inventory.md`. |
+| `--momentum-relaxed` | Audit-mode momentum filter relaxation: ADX threshold 20 (from 25) and EMA gap floor 0.02% (from 0.05%). Used in Phase A2 to lift momentum trade counts to a statistically sliceable density. Strict defaults remain unchanged for live runs. |
 
 ### 6.3 Environment variables
 
@@ -956,7 +1018,11 @@ This means backtest win rates and signal frequency will differ from live perform
 
 ### 9.2 Fill price assumption
 
-Entry is simulated at `next_bar.open`. In live trading, MARKET orders fill at the current offer (BUY) or bid (SELL), which includes the spread. The backtest therefore overstates entry accuracy by approximately half the spread per trade.
+Entry is simulated at `next_bar.open ± spread_pts/2` (BUY at ask, SELL at bid); exit is simulated at `bar.close ∓ spread_pts/2`. Spread is therefore deducted from P&L via the fill prices — `Trade.pnl_points` is **net of spread**. Gross-vs-net decomposition is available via `entry_mid`, `exit_mid`, and `spread_at_entry` on each `Trade` record (added 2026-05-14 for the Phase A audit).
+
+What is **not** modelled:
+- Slippage beyond the half-spread fill assumption (live MARKET orders may slip further during news / thin liquidity)
+- Time-varying spread (`backtest/spreads.py` returns a single static value per instrument; Phase A4 spread-widening checks need a multiplier or live snapshots — see `AUDIT_PLAN.md`)
 
 ### 9.3 No parallel positions
 
