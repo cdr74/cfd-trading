@@ -32,7 +32,7 @@ MCP endpoints: `https://localhost:8089/mcp` (cfd-trading) · `https://localhost:
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | Setup, starting the system, running a session step-by-step, backtests, troubleshooting |
 | [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md) | Architecture, design decisions, MCP tools, config schemas, SQLite schema, implementation status |
 | [`docs/CFD_STRATEGY_CATALOG.md`](docs/CFD_STRATEGY_CATALOG.md) | Algorithm design and mathematical definitions for all strategies (S1 momentum, S2 mean reversion, S3 breakout deferred) |
-| [`docs/BACKTESTING.md`](docs/BACKTESTING.md) | Backtesting framework: data layer, entry signals, engine, test suite, results interpretation |
+| [`docs/BACKTESTING.md`](docs/BACKTESTING.md) | Backtesting framework: data layer, entry signals, engine, test suite *(rebuilt 2026-05-15 — engine shares one deterministic exit path with the live monitor; pre-2026-05-15 results were invalidated and superseded by a clean re-baseline)* |
 | [`CLAUDE.md`](CLAUDE.md) | Claude Code collaboration rules: design decisions, testing standards, session startup checklist |
 | [`TODO.md`](TODO.md) | Phase-by-phase implementation status |
 | [`integration-test/SMOKE_TESTS.md`](integration-test/SMOKE_TESTS.md) | End-to-end smoke test checklist (SM-01 through SM-11) |

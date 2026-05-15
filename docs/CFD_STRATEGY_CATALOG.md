@@ -161,11 +161,11 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 |---|---|---|
 | Hard stop loss | ATR_14 × 1.5 below entry (long) / above entry (short) | `risk.stop_loss.default_pct` |
 | Hard stop ceiling | Must not exceed `max_pct` from YAML | `risk.stop_loss.max_pct = 5.0%` |
-| Trailing stop | Ratchet-only. Initial distance = ATR_14 × 1.5. Governed by YAML bounds | `trailing_stop.min/max_distance_pct` |
+| Trailing stop | *(Resolved 2026-05-15.)* Ratchet-only. Distance = **ATR₁₄ at entry × 1.5, fixed for the trade** (not recomputed per bar). Stop = best-favourable-price ∓ distance; never loosens. ATR comes from the shared streaming `signal_engine` (live + backtest, identical). | `trailing_stop.atr_multiplier = 1.5` |
 | Take profit (initial) | ATR_14 × 2.5 from entry — minimum R:R 1.5:1 | `risk.take_profit.min_rr_ratio = 1.5` |
 | Time exit | `close_minutes_before_session_end = 30` — enforced by monitor | `risk.time_exit` |
 
-**EMA cross-back exit:** The monitor is a pure price-level rule engine — it cannot evaluate EMAs. If EMA_fast crosses back through EMA_slow, this is detected by Claude at the next `scan_markets` / `analyze_instrument` call (up to 60 seconds later). Claude proposes CLOSE when it detects a cross-back. This is not a monitor rule.
+**EMA cross-back exit:** *(Revised 2026-05-15.)* This is now a **deterministic monitor rule** — SYSTEM_DESIGN §3.7 rule 4 (signal-exit). The monitor maintains the strategy's streaming signal state (shared `strategy/signal_engine`, warm-up back-filled on start) and closes the position when EMA-fast crosses back through EMA-slow against it, evaluated every 60 s — no longer dependent on Claude noticing it in the conversation. Claude may still propose CLOSE earlier from its own analysis; the monitor rule is the guaranteed floor.
 
 ### 5.4 Claude Prompt Contract
 
@@ -206,7 +206,7 @@ z_t     = (close_bid_t - mu_t) / sigma_t
 | 1.0 < \|z_t\| < 2.0 | Wait — not extended enough to justify entry |
 | \|z_t\| > 3.0 | Extreme — possible trend break; do not enter, re-evaluate regime |
 
-**Implementation note:** mu_t, sigma_t, and z_t (20-bar window) are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). The exit zone (|z_t| < 0.3) is not enforced by the monitor — Claude detects it at the next analysis call.
+**Implementation note:** mu_t, sigma_t, and z_t (20-bar window) are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). *(Revised 2026-05-15.)* The reversion exit (`|z_t| ≤ zscore_exit_threshold`) **is now enforced by the monitor** as a deterministic signal-exit rule (SYSTEM_DESIGN §3.7 rule 4) running every 60 s via the shared `strategy/signal_engine` — it no longer depends on Claude detecting it at the next analysis call.
 
 ### 6.2 Regime Validity Check (Critical)
 
@@ -225,7 +225,7 @@ Gate on all of the following before any signal evaluation:
 |---|---|---|
 | Hard stop in price terms | Also enforce `max_pct` from YAML as absolute ceiling | `risk.stop_loss.max_pct = 3.0%` |
 | Default stop | `default_pct = 1.5%` from entry | `risk.stop_loss.default_pct` |
-| Target exit | When z_t returns to 0.0 — not before | Expressed in `take_profit.initial_value` at entry |
+| Target exit | When `|z_t| ≤ zscore_exit_threshold` (z back to midline) | **Deterministic monitor signal-exit** (§3.7 rule 4) via shared `signal_engine`, every 60 s |
 | Trailing stop | Disabled | `trailing_stop.enabled = false` |
 | Time exit | Close 30 min before session end — hard rule | `risk.time_exit` |
 | Scaling | NOT permitted — adding to a losing reversion trade is forbidden | `position_scaling.enabled = false` |
@@ -389,8 +389,14 @@ Values below reflect the current `config/strategies/*.yaml` files, which are the
 | `stop_loss.default_pct` | 2.0% | 1.5% | TBD |
 | `stop_loss.max_pct` | 5.0% | 3.0% | TBD |
 | `trailing_stop.enabled` | true | false | true (post +1R) |
-| `trailing_stop.min_distance_pct` | 0.5% | — | TBD |
-| `trailing_stop.max_distance_pct` | 3.0% | — | TBD |
+| `trailing_stop.atr_multiplier` | **1.5** (dist = ATR₁₄@entry × mult, fixed, ratchet-only) | — | TBD |
+
+> *(Resolved 2026-05-15.)* S1 trailing is ATR-based (`atr_multiplier`), superseding the
+> former `min/max_distance_pct` fixed-% fields. S2 trailing disabled. **S5/ORB trailing
+> is disabled** (`orb.yaml trailing_stop.enabled = false`) — OR-width stop + fixed
+> 2×OR-width TP only; ATR-trailing was tested and reverted (see §13, RESEARCH).
+> yaml files now reflect this: `momentum.yaml trailing_stop.atr_multiplier: 1.5`
+> (fixed-% fields removed); `orb.yaml trailing_stop.enabled: false`.
 | `take_profit.min_rr_ratio` | 1.5 | 2.0 | TBD |
 | `position_scaling.enabled` | true | false | true |
 | `position_scaling.max_adds` | 2 | 0 | 1 |
@@ -450,6 +456,7 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 **Key design choices:**
 - **2-bar OR (30 min):** more robust than 1-bar; price has two bars to establish genuine support/resistance rather than a single noisy open candle. Matches the 30-min OR in the Zarattini & Aziz research setup.
 - **OR-width-based stop:** stop at opposite OR boundary is the natural invalidation level. Tighter stop for narrow ranges (fewer false breakout losses), wider for wide ranges (respects the actual range). Implemented via `get_entry_levels()` on `ORBSignalState`.
+- **No trailing stop** *(resolved 2026-05-15)*: ORB exits on the OR-width hard stop, the fixed 2×OR-width TP, or the time-exit only. ATR×1.5 trailing was tested and reverted — OR-width is already a session-calibrated ATR proxy, so trailing exits winners early (see RESEARCH "ATR-Trailing Exit"). `orb.yaml trailing_stop.enabled = false`.
 - **Strict inequality:** touching OR level is not a breakout; requires `bar.high > OR high`
 - **min_rr_ratio = 2.0:** TP = entry ± OR_width × 2. ORB targets session continuation; higher R:R than momentum (1.5).
 
@@ -470,21 +477,7 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 ---
 
-## 14. Backtest Experiment Log
-
-Tracks all signal and parameter changes in chronological order so we can see what was tried and avoid repeating failed approaches.
-
-| Date | Change | Resolution | Key metrics | Conclusion |
-|---|---|---|---|---|
-| 2026-05-12 | Baseline: EMA gap 0.02%, no spread costs | M1 | Momentum: GOLD PF 1.52 (71 trades), UK100 PF 3.04 (15 trades). Mean rev: XBRUSD PF 1.15 (226 trades), DE40 PF 1.48 (25 trades) | Best baseline pairs identified. Momentum stop% near 100% — structural entry-timing problem |
-| 2026-05-13 | EMA gap 0.02% → 0.05% | M1 | Momentum trades: ~528 → ~88 across watchlist; avg PF unchanged ~0.83 | Fewer signals, same quality — gap filter alone cannot fix M1 momentum |
-| 2026-05-13 | Added ATR≥4×spread gate + 5-bar hold cap + spread fill costs (mean rev) | M1 | Mean rev DE40 PF 1.10 (194 trades), most instruments PF < 1.0; signal count 2940 DE40 → too high | Spread costs expose that mean rev edge is near zero at M1. Hold cap and ATR gate not sufficient alone |
-| 2026-05-13 | Added M30 directional bias gate (30-bar OLS slope on M1 bars, momentum only) | M1 | Momentum signals: near zero across all instruments | M30 gate on M1 data is self-defeating — crossovers happen at reversals when M30 slope still reflects prior direction. Gate disabled in `run.py`. Needs true M30 bar data to be useful |
-| 2026-05-13 | M1 → M15 aggregation (in-process); M30 gate disabled | M15 | Mean rev: best PF 1.10 DE40, most < 1.0. Momentum: near-zero signals — EMA9/21 warm-up is 22 bars = 5.5 hours at M15 | EMA9/21 wrong for M15 (too slow). Mean rev marginally better but no real edge. Resolution change alone insufficient |
-| 2026-05-13 | ORB v1 — 1-bar OR, fixed 0.5% stop, 2:1 R:R | M15 | Stop rate 88–97%; all instruments PF < 1.1; best: EURUSD 1.09, USDJPY 1.16 | Single-bar OR is noisy; false breakouts dominate; fixed stop unrelated to OR width |
-| 2026-05-13 | ORB v2 — 2-bar OR (30 min), OR-width stop (stop=OR low/high), 2:1 R:R | M15 | Stop rate reduced to 63–94%; DE40 PF 1.62, UK100 PF 1.19, USDJPY PF 1.27, US500 PF 1.03 | Clear equity index + USDJPY edge. FX pairs, crypto, commodities remain unprofitable |
-| 2026-05-13 | ORB v3 — ATR-trailing exit (1.5×ATR) replaces fixed TP; universe restricted to DE40/UK100/USDJPY | M15 | DE40 PF 1.46 (win% 47.9%), UK100 PF 1.10, USDJPY PF 1.22 | ATR trail at 1.5× too tight — exits winners early. Fixed 2×OR-width TP (v2) remains better |
-| 2026-05-13 | ORB v2 with LONG/SHORT directional split — full universe (no instrument filter) | M15 | DE40: L-PF 2.31 / S-PF 1.02; UK100: L-PF 1.77 / S-PF 0.83; USDJPY: L-PF 1.33 / S-PF 1.22; XBRUSD: L-PF 0.59 / S-PF 1.69; GOLD: L-PF 0.48 / S-PF 1.30 | Most positive PF is regime-driven (Jan-May 2026 bullish equities). Only USDJPY shows genuine two-way ORB edge (both PF > 1.2). DE40/UK100 edge comes entirely from LONG direction; commodities have opposite SHORT bias. Need multi-regime data (6–12 months) to distinguish structural ORB edge from trend-riding |
+<!-- §14 Backtest Experiment Log removed 2026-05-15 — all results invalidated (time-exit disabled in engine); see project rebuild -->
 
 ---
 

@@ -1,8 +1,8 @@
-"""Unit tests for backtest/signals.py — pure functions, no I/O."""
+"""Unit tests for strategy/signal_engine.py — pure functions, no I/O."""
 
 import pytest
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import (
+from cfd_trading.strategy.signal_engine import (
     momentum_signal, mean_reversion_signal,
     MomentumSignalState, MeanReversionSignalState,
 )
@@ -241,54 +241,78 @@ class TestATRGate:
         assert result == "SHORT"
 
 
-class TestHoldCap:
-    """Hold cap exit — fires after max_hold_bars bars in trade."""
+class TestMomentumCrossBackExit:
+    """check_exit() — momentum exits when EMA crosses back against the position
+    (SYSTEM_DESIGN §3.7 rule 4). Replaces the removed MR hold-cap."""
 
-    def test_hold_cap_fires_after_max_bars(self):
-        # notify_entry() sets _bars_in_trade=0; each update() increments it.
-        # After max_hold_bars updates → check_exit returns "Hold cap".
-        state = MeanReversionSignalState(max_hold_bars=3)
-        # Feed any bars to warm up state
-        for bar in _bars([1.0] * 19 + [1.5]):
+    def _state_in_long(self) -> MomentumSignalState:
+        # 21 flat + spike up → LONG crossover at bar 22 (ADX gate off so it fires)
+        state = MomentumSignalState(adx_threshold=0.0)
+        for bar in _flat_then_spike(21, 1.0, 1.10):
             state.update(bar)
-        state.notify_entry()
-        for bar in _bars([1.5] * 3):
-            state.update(bar)
-        assert state.check_exit() == "Hold cap"
+        state.notify_entry("BUY")
+        return state
 
-    def test_hold_cap_not_triggered_before_max_bars(self):
-        state = MeanReversionSignalState(max_hold_bars=3)
-        for bar in _bars([1.0] * 19 + [1.5]):
+    def test_no_exit_while_trend_holds(self):
+        state = self._state_in_long()
+        for bar in _bars([1.10 + i * 0.01 for i in range(1, 6)]):
             state.update(bar)
-        state.notify_entry()
-        for bar in _bars([1.5] * 2):
-            state.update(bar)
-        # Only 2 bars in trade; cap at 3 not yet reached
-        # (z large → midline also not triggered)
-        result = state.check_exit()
-        assert result != "Hold cap"
+        assert state.check_exit() is None
 
-    def test_hold_cap_cleared_after_notify_exit(self):
-        # After notify_exit, _bars_in_trade is None → hold cap inactive
-        state = MeanReversionSignalState(max_hold_bars=2)
-        for bar in _bars([1.0] * 19 + [1.5]):
+    def test_long_exits_on_downward_cross_back(self):
+        state = self._state_in_long()
+        fired = None
+        for bar in _bars([0.5] * 10):
             state.update(bar)
-        state.notify_entry()
-        for bar in _bars([1.5] * 5):
+            if state.check_exit():
+                fired = state.check_exit()
+                break
+        assert fired == "EMA cross-back"
+
+    def test_short_exits_on_upward_cross_back(self):
+        state = MomentumSignalState(adx_threshold=0.0)
+        for bar in _flat_then_spike(21, 1.0, 0.90):   # SHORT crossover
             state.update(bar)
-        assert state.check_exit() == "Hold cap"
+        state.notify_entry("SELL")
+        fired = None
+        for bar in _bars([1.5] * 10):
+            state.update(bar)
+            if state.check_exit():
+                fired = state.check_exit()
+                break
+        assert fired == "EMA cross-back"
+
+    def test_no_exit_without_position(self):
+        # No notify_entry → no open position → never exits
+        state = MomentumSignalState(adx_threshold=0.0)
+        for bar in _bars([1.0] * 21 + [1.10] + [0.5] * 10):
+            state.update(bar)
+        assert state.check_exit() is None
+
+    def test_exit_clears_after_notify_exit(self):
+        state = self._state_in_long()
+        for bar in _bars([0.5] * 10):
+            state.update(bar)
         state.notify_exit()
-        # After exit, hold cap resets regardless of bar count
-        assert state.check_exit() != "Hold cap"
+        assert state.check_exit() is None
 
-    def test_hold_cap_priority_over_z_score_midline(self):
-        # When both hold cap and midline conditions are true, hold cap wins
-        state = MeanReversionSignalState(max_hold_bars=1, zscore_exit_threshold=100.0)
+
+class TestMeanReversionHoldCapRemoved:
+    """The former hold-cap exit was removed 2026-05-15 — only z-midline remains."""
+
+    def test_max_hold_bars_constructor_arg_removed(self):
+        with pytest.raises(TypeError):
+            MeanReversionSignalState(max_hold_bars=5)
+
+    def test_long_hold_never_returns_hold_cap(self):
+        state = MeanReversionSignalState()
         for bar in _bars([1.0] * 19 + [1.5]):
             state.update(bar)
-        state.notify_entry()
-        state.update(_bars([1.5])[0])  # bars_in_trade = 1 ≥ max_hold_bars → hold cap
-        assert state.check_exit() == "Hold cap"
+        state.notify_entry("SELL")
+        # Hold far longer than the old 5-bar cap; "Hold cap" must never appear
+        for bar in _bars([1.5] * 50):
+            state.update(bar)
+            assert state.check_exit() != "Hold cap"
 
 
 class TestCheckExit:
@@ -321,7 +345,8 @@ class TestCheckExit:
         state.update(_bars([1.0])[0])
         assert state.check_exit() == "Z-score midline"
 
-    def test_momentum_check_exit_always_none(self):
+    def test_momentum_check_exit_none_without_position(self):
+        # check_exit is the signal-exit rule; with no open position it is inert
         state = MomentumSignalState()
         for bar in _flat_then_spike(21, 1.0, 1.10):
             state.update(bar)

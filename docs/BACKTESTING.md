@@ -4,6 +4,13 @@ A complete reference for running, understanding, and extending the backtesting f
 
 ---
 
+> **⚠️ ALL RESULTS INVALIDATED (2026-05-15).** Every backtest result previously in
+> this document was produced with the intraday time-exit disabled (the engine never
+> passed `session_end_time` to `evaluate_position`). §6.4–6.9, §8.5 and §8.8 were
+> removed. No validated results exist yet — the engine is being rebuilt to mirror the
+> live mechanical monitor. This document currently describes methodology only.
+
+
 ## Contents
 
 1. [Purpose and Scope](#1-purpose-and-scope)
@@ -343,6 +350,18 @@ SELL: candidate = close × (1 + min_distance_pct/100)
 
 The stop only ratchets in the profitable direction. Once raised (BUY) or lowered (SELL), it never reverses.
 
+> **Shared deterministic exit path (implemented 2026-05-15).**
+> Exits are the full ordered set: hard stop → trailing → take-profit → **signal-exit**
+> → **time-exit**. The signal-exit (SYSTEM_DESIGN §3.7 rule 4) is a deterministic
+> per-strategy predicate (MR: z-back-to-midline; momentum: EMA cross-back; ORB: none)
+> living in the shared `strategy/signal_engine` module imported by *both* the live
+> monitor and this engine — so the two cannot drift. The former backtest-only
+> `check_exit()` hold-cap hack is dropped; its z-midline half is promoted into that
+> shared module. Time-exit is now actually supplied (`session_end_time` + injected
+> bar-time `now`, §5.6); previously it was dead (`session_end_time=None`). Because the
+> z-midline/cross-back exits are now present in *both* live and backtest, the earlier
+> "MR reads worse than live / mechanical floor" caveat no longer applies.
+
 ### 5.4 P&L calculation
 
 P&L is computed in **points** (price units), not currency. Spread costs are embedded in the fill prices when `spread_pts > 0`:
@@ -391,6 +410,31 @@ Each `Trade` record contains:
 | `spread_at_entry` | the `spread_pts` value used to adjust the entry fill |
 | `resolution` | bar resolution this trade was generated at (stamped by `run.py`, not the engine) |
 
+### 5.6 Session model & time-exit (backtest)
+
+> **Implemented 2026-05-15.** Supersedes the former
+> "time-exit not active" behaviour (§9.5).
+
+Live closes intraday because the human passes `session_end_time` to `start_session`;
+the monitor's time-exit fires `close_minutes_before_session_end` before it. The
+backtest reproduces this with a **single global daily close**:
+
+- `--session-close-utc HH:MM` (default `21:00`) — close time-of-day, UTC, applied to
+  every simulated trading day for every instrument.
+- For each bar the engine derives that bar's session end = `bar_date @ session_close_utc`
+  (UTC) and passes it, plus the bar's UTC timestamp as injected `now`, to
+  `evaluate_position()`. The per-strategy YAML `time_exit.close_minutes_before_session_end`
+  (30) is unchanged — effective last-hold ≈ 20:30 UTC at the default.
+- **No overnight/weekend holds.** Every position is force-flattened by the daily
+  time-exit. If a UTC day has no bar in the close window (early close / data gap),
+  the engine flattens at that day's last available bar with reason
+  `Session close (no bar at threshold)`.
+- **No new entries** at/after `session_end − close_minutes_before_session_end` on a
+  given day — the deterministic stand-in for "Claude would not open a fresh position
+  minutes before the forced flatten". Weekends/holidays have no bars → no entries.
+
+`End of data` remains only for the final partial day of the dataset.
+
 ---
 
 ## 6. CLI Runner
@@ -425,10 +469,11 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 | `--strategy NAME` | Run a single strategy (mutually exclusive with `--all-strategies`) |
 | `--all-strategies` | Run all strategies discovered in `config/strategies/` (excludes `_base` and `scan`) |
 | `--instruments LIST` | Comma-separated subset of watchlist epics (mutually exclusive with `--epic` and `--all-epics`). Used for audit runs on a trimmed universe. Errors if any name is not in `config/watchlist.yaml`. Example: `EURUSD,GBPUSD,US500,DE40,GOLD`. |
-| `--resolution` | Target bar resolution strategies execute against: `M1` `M5` `M15` `M30` `M60` (default: `M1`). Bars are aggregated to this from `--source-resolution` if the two differ. |
+| `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60`. **Default: each strategy's own `resolution:` from its YAML** (single source of truth, shared with the live monitor — momentum/mean_reversion `M1`, orb `M15`). Pass this only to override for an experiment (the audit re-baseline pins `M15` this way). Bars are aggregated from `--source-resolution` if the two differ. |
 | `--source-resolution` | Resolution of bars read from the DB (default: `M1`). Set to match `--resolution` to skip aggregation when native bars are stored at the target resolution (e.g. native M15 from MT5). |
-| `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for Phase A audit slicing — see `AUDIT_PLAN.md` and `/audit/A1_inventory.md`. |
+| `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for Phase A audit slicing — see `AUDIT_PLAN.md`. |
 | `--momentum-relaxed` | Audit-mode momentum filter relaxation: ADX threshold 20 (from 25) and EMA gap floor 0.02% (from 0.05%). Used in Phase A2 to lift momentum trade counts to a statistically sliceable density. Strict defaults remain unchanged for live runs. |
+| `--session-close-utc HH:MM` | Daily intraday close time (UTC), applied to every simulated trading day for every instrument. Default `21:00`. Drives the mechanical time-exit (`close_minutes_before_session_end` before this). Guarantees no overnight/weekend holds. See §5.6. |
 
 ### 6.3 Environment variables
 
@@ -439,231 +484,7 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 
 `BACKTEST_MODE=true` is set automatically at startup.
 
-### 6.4 Historical baseline results (Jan–May 2026, M1, gap=0.02% — pre-filter-update)
-
-> **Note:** These results were captured with `_MIN_EMA_GAP_PCT = 0.02%` and no spread costs. Kept for comparison only. Current defaults are gap=0.05%, spread costs in, hold cap 5 bars.
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-EURUSD    mean_reversion  3       33.3%   0.76    3.029    66.7%   0.21     -0.17R
-GBPUSD    mean_reversion  2       0.0%    0.00    2.302    50.0%   0.14     -0.80R
-USDJPY    mean_reversion  4       50.0%   1.45    1.511    50.0%   0.29     +0.24R
-EURGBP    mean_reversion  1       0.0%    0.00    0.186    0.0%    0.07     -0.13R
-US500     mean_reversion  16      18.8%   0.50    16.708   75.0%   1.11     -0.56R
-DE40      mean_reversion  25      44.0%   1.48    5.252    56.0%   1.73     +0.37R
-UK100     mean_reversion  17      29.4%   0.69    10.751   70.6%   1.17     -0.29R
-GOLD      mean_reversion  92      31.5%   0.83    27.635   68.5%   6.21     -0.31R
-XBRUSD    mean_reversion  226     41.6%   1.15    43.015   58.4%   14.54    +0.14R
-BTCUSD    mean_reversion  74      35.1%   1.02    12.649   64.9%   7.33     +0.02R
-ETHUSD    mean_reversion  116     34.5%   0.99    20.919   65.5%   11.49    -0.00R
-EURUSD    momentum        4       25.0%   1.32    1.145    100.0%  0.29     +0.05R
-GBPUSD    momentum        4       25.0%   0.18    0.798    100.0%  0.29     -0.10R
-USDJPY    momentum        5       20.0%   0.01    1.912    100.0%  0.36     -0.20R
-EURGBP    momentum        1       0.0%    0.00    0.117    0.0%    0.07     -0.06R
-US500     momentum        13      30.8%   0.35    4.686    100.0%  0.90     -0.17R
-DE40      momentum        22      22.7%   0.46    4.616    100.0%  1.52     -0.11R
-UK100     momentum        15      53.3%   3.04    1.896    100.0%  1.04     +0.26R
-GOLD      momentum        71      39.4%   1.52    4.539    95.8%   4.79     +0.16R
-XBRUSD    momentum        201     37.3%   0.97    16.668   98.0%   12.93    -0.01R
-BTCUSD    momentum        76      34.2%   0.60    8.049    100.0%  7.53     -0.05R
-ETHUSD    momentum        116     35.3%   0.96    8.130    100.0%  11.49    -0.00R
-```
-
-### 6.5 M15 results (Jan–May 2026, M15 aggregated from M1, gap=0.05%, spread costs in)
-
-Run with: `python -m cfd_trading.backtest.run --all-strategies --all-epics --resolution M15`
-
-Run time: **~3 seconds** (73k M15 bars vs 1.1M M1 bars).
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-EURUSD    mean_reversion  198     46.0%   0.84    1.828    0.0%    14.15    -0.00R
-GBPUSD    mean_reversion  219     48.4%   0.73    2.597    0.0%    15.66    -0.01R
-USDJPY    mean_reversion  221     47.5%   0.83    2.569    0.0%    15.8     -0.00R
-EURGBP    mean_reversion  37      51.4%   1.05    0.317    0.0%    2.64     +0.00R
-US500     mean_reversion  209     47.8%   0.89    3.395    0.0%    14.47    -0.01R
-DE40      mean_reversion  194     55.7%   1.10    6.648    0.0%    13.42    +0.01R
-UK100     mean_reversion  205     51.7%   0.98    3.927    0.0%    14.17    -0.00R
-GOLD      mean_reversion  218     50.9%   0.73    14.337   2.8%    14.72    -0.04R
-XBRUSD    mean_reversion  188     48.9%   1.07    10.946   6.9%    12.1     +0.02R
-BTCUSD    mean_reversion  119     49.6%   0.80    8.446    4.2%    11.79    -0.04R
-ETHUSD    mean_reversion  155     60.0%   1.07    4.927    6.5%    15.36    +0.01R
-EURUSD    momentum        0       0.0%    0.00    0.0      0.0%    0.0      +0.00R
-GBPUSD    momentum        0       0.0%    0.00    0.0      0.0%    0.0      +0.00R
-USDJPY    momentum        0       0.0%    0.00    0.0      0.0%    0.0      +0.00R
-EURGBP    momentum        0       0.0%    0.00    0.0      0.0%    0.0      +0.00R
-US500     momentum        1       0.0%    0.00    0.539    100.0%  0.07     -0.27R
-DE40      momentum        3       0.0%    0.00    1.707    100.0%  0.21     -0.28R
-UK100     momentum        1       0.0%    0.00    0.456    100.0%  0.07     -0.23R
-GOLD      momentum        6       16.7%   0.01    3.241    100.0%  0.41     -0.27R
-XBRUSD    momentum        9       44.4%   0.63    3.791    100.0%  0.58     -0.10R
-BTCUSD    momentum        6       33.3%   0.24    1.604    100.0%  0.59     -0.13R
-ETHUSD    momentum        5       40.0%   0.18    1.998    100.0%  0.5      -0.20R
-```
-
-**Reading the M15 results:**
-
-*Mean reversion — improved signal quality but still marginal:*
-- **DE40**: PF 1.10, 194 trades — larger sample than M1, but edge has compressed. Win rate 55.7% is the highest across all instruments.
-- **EURGBP**: PF 1.05, 37 trades — barely positive; only 2.6 sig/wk (gap‐bounded FX pair).
-- **ETHUSD**: PF 1.07, 155 trades — borderline positive; but 6.5% stop rate and high BTCUSD/ETHUSD spreads suggest costs eating the edge.
-- **XBRUSD**: PF 1.07, 188 trades — marginal improvement over M1.
-- All FX pairs (EURUSD, GBPUSD, USDJPY) and GOLD are negative PF — mean reversion does not suit these.
-- **Stop% ≈ 0%** across almost all instruments: positions are NOT stopping out — they hold-cap or midline-exit. The 5-bar hold cap at M15 = 75-minute maximum hold, which is reasonable but may still be too short for full reversion.
-
-*Momentum — structurally broken at M15 with EMA9/21:*
-- Near-zero signals across all instruments. EMA9/21 crossover requires ~22 bars of warm-up; at M15, 22 bars = 5.5 hours — essentially the full intraday session. An EMA crossover at M15 scale is too slow to be a useful intraday signal.
-- The 0.05% gap filter (designed for M1 where it means "4 pts at 8,000") is proportionally smaller at M15 (where 15-min ATR is ~15× larger), so the filter is not the problem. The EMA periods themselves are wrong for M15.
-
-*Conclusion — neither strategy is profitable at M15 as currently parameterised. The resolution change alone is not sufficient.*
-
-### 6.6 ORB v1 results (Jan–May 2026, M15, 1-bar OR, fixed stop=0.5%)
-
-Initial ORB run: single 15-min opening bar defines the range; fixed 0.5% stop; 2:1 R:R.
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-EURUSD    orb             51      35.3%   1.09    3.016    90.2%   3.65     +0.03R
-GBPUSD    orb             57      31.6%   0.55    5.14     96.5%   4.08     -0.14R
-USDJPY    orb             55      29.1%   1.16    2.269    89.1%   3.93     +0.05R
-EURGBP    orb             24      29.2%   0.58    1.789    95.8%   1.71     -0.13R
-US500     orb             67      40.3%   0.90    6.057    89.6%   4.64     -0.04R
-DE40      orb             71      32.4%   0.82    5.922    88.7%   4.91     -0.08R
-UK100     orb             70      38.6%   0.94    5.193    92.9%   4.84     -0.02R
-GOLD      orb             73      28.8%   0.58    7.947    95.9%   4.93     -0.21R
-XBRUSD    orb             75      26.7%   0.49    19.554   90.7%   4.83     -0.45R
-BTCUSD    orb             71      25.4%   0.34    17.419   97.2%   7.03     -0.44R
-ETHUSD    orb             71      29.6%   0.59    12.499   91.5%   7.03     -0.25R
-```
-
-Key finding: stop rate 88–97% — false breakouts dominate. Single-bar OR is noisy; fixed stop not aligned with natural invalidation level.
-
-### 6.7 ORB v2 results (Jan–May 2026, M15, 2-bar OR, OR-width-based stop, 2:1 R:R)
-
-Improvements: (a) OR defined over first 2 M15 bars (30 min); (b) stop placed at OR low/high (natural invalidation); (c) TP = entry ± OR_width × 2.
-
-Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-EURUSD    orb             68      30.9%   0.80    1.528    69.1%   4.86     -0.33R
-GBPUSD    orb             69      26.1%   0.54    4.001    73.9%   4.93     -0.34R
-USDJPY    orb             68      36.8%   1.27    1.869    63.2%   4.86     +0.10R
-EURGBP    orb             62      27.4%   0.44    3.023    74.2%   4.42     -0.37R
-US500     orb             67      40.3%   1.03    4.167    88.1%   4.64     -0.12R
-DE40      orb             71      39.4%   1.62    2.326    85.9%   4.91     +0.11R
-UK100     orb             69      42.0%   1.19    4.421    84.1%   4.77     +0.09R
-GOLD      orb             72      31.9%   0.83    4.006    91.7%   4.86     -0.34R
-XBRUSD    orb             74      32.4%   1.06    9.189    94.6%   4.76     -0.31R
-BTCUSD    orb             71      31.0%   0.52    12.934   90.1%   7.03     -0.36R
-ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.38R
-```
-
-**Reading the ORB v2 results:**
-
-- **Stop rate reduced significantly** — 63–94% vs 88–97% previously. The 30-min OR gives price more room to form a genuine range, reducing immediate false-breakout reversals.
-- **Equity indices and USDJPY now profitable** — DE40 PF 1.62 (+0.11R), UK100 PF 1.19 (+0.09R), USDJPY PF 1.27 (+0.10R). US500 borderline (PF 1.03). These four instruments show a genuine ORB edge.
-- **AvgR is negative despite positive PF for some instruments** — OR-width-based stops mean the risk amount varies per trade. Spread costs are large relative to OR width on thin false-breakout stops, compressing the per-trade R. The PF calculation is a more reliable signal than AvgR here.
-- **FX pairs (except USDJPY), crypto, and commodities remain unprofitable** — EURUSD/GBPUSD/EURGBP PF 0.44–0.80; BTCUSD PF 0.52. Wide spreads relative to typical OR width erode edge on instruments where the ORB structural advantage is weaker.
-- **XBRUSD borderline** — PF 1.06 but MaxDD 9.2%; not reliable.
-
-### 6.8 ORB v3 results (Jan–May 2026, M15, 2-bar OR, OR-width stop, ATR-trailing exit, DE40/UK100/USDJPY only — superseded)
-
-Improvements vs v2: (a) instrument universe restricted to confirmed-edge instruments; (b) fixed 2×OR-width TP replaced with ATR-trailing stop at 1.5×ATR(14) from bar high/low peak; TP set to 99× (effectively disabled).
-
-Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-USDJPY    orb             70      31.4%   1.22    1.052    98.6%   5.0      -0.08R
-DE40      orb             71      47.9%   1.46    1.791    98.6%   4.91     +0.16R
-UK100     orb             70      35.7%   1.10    3.267    100.0%  4.84     +0.06R
-```
-
-**Reading the ORB v3 results:**
-
-- **Stop% 98–100%** — all exits are via hard stop, including ATR-ratcheted stops. With TP disabled, there are no take-profit exits by design; stop% is expected to be near 100%.
-- **DE40 win rate 47.9%** — improved significantly from v2 (39.4%). ATR trailing locks in gains before reversal, converting formerly-stopped trades into winners. However PF dropped (1.62 → 1.46) because each win is smaller (trade exits at ATR trail rather than at the full 2×OR-width TP target).
-- **UK100 and USDJPY slightly weaker** — PF 1.10 and 1.22 vs v2 (1.19 and 1.27). ATR trailing at 1.5×ATR is cutting winning trades too early on these instruments — the fixed 2×OR-width TP in v2 was a better target.
-- **Net verdict: v2 fixed-TP is still the best configuration.** The ATR multiplier of 1.5 is too tight. The fixed 2×OR-width TP works because the OR width is already an ATR proxy for the session open volatility.
-
-**Diagnostic — why ATR-trailing underperforms fixed TP here:**
-The OR width (defined over 30 min) already encodes the session opening volatility — it is effectively a session-calibrated ATR. Using the OR width as the TP distance is therefore a natural ATR-based target. The per-bar M15 ATR(14) is more variable and at 1.5× is tighter than the 2×OR-width target on most sessions, causing premature exits on what would have been full TP hits. A larger ATR multiplier (e.g. 3.0×) or a combined approach (ATR trail with OR-width TP as a floor) may recover the v2 edge while adding upside capture on large session moves.
-
----
-
-### 6.9 ORB v2 directional split — full universe (Jan–May 2026, M15)
-
-Same ORB v2 configuration as §6.7 (2-bar OR, OR-width stop, 2:1 R:R, all instruments). The backtest output now includes a second LONG vs SHORT breakdown table, exposing regime bias in the aggregate PF figures.
-
-Run with: `python -m cfd_trading.backtest.run --strategy orb --all-epics --resolution M15`
-
-**Main table (combined LONG + SHORT):**
-
-```
-Epic      Strategy        Trades  Win%    PF      MaxDD%   Stop%   Sig/wk   AvgR
---------  --------------  ------  ------  ------  -------  ------  -------  -------
-EURUSD    orb             68      30.9%   0.80    1.528    69.1%   4.86     -0.33R
-GBPUSD    orb             69      26.1%   0.54    4.001    73.9%   4.93     -0.34R
-USDJPY    orb             68      36.8%   1.27    1.869    63.2%   4.86     +0.10R
-EURGBP    orb             62      27.4%   0.44    3.023    74.2%   4.42     -0.37R
-US500     orb             67      40.3%   1.03    4.167    88.1%   4.64     -0.12R
-DE40      orb             71      39.4%   1.62    2.326    85.9%   4.91     +0.11R
-UK100     orb             69      42.0%   1.19    4.421    84.1%   4.77     +0.09R
-GOLD      orb             72      31.9%   0.83    4.006    91.7%   4.86     -0.34R
-XBRUSD    orb             74      32.4%   1.06    9.189    94.6%   4.76     -0.31R
-BTCUSD    orb             71      31.0%   0.52    12.934   90.1%   7.03     -0.36R
-ETHUSD    orb             71      28.2%   0.54    14.778   90.1%   7.03     -0.38R
-```
-
-**Directional split:**
-
-```
-Epic      Strategy        L-Trades  L-Win%   L-PF    S-Trades  S-Win%   S-PF
---------  --------------  --------  -------  ------  --------  -------  ------
-EURUSD    orb             32        31.2%    1.21    36        30.6%    0.55
-GBPUSD    orb             35        31.4%    0.68    34        20.6%    0.43
-USDJPY    orb             38        44.7%    1.33    30        26.7%    1.22
-EURGBP    orb             28        17.9%    0.22    34        35.3%    0.69
-US500     orb             42        38.1%    0.98    25        44.0%    1.12
-DE40      orb             37        40.5%    2.31    34        38.2%    1.02
-UK100     orb             34        41.2%    1.77    35        42.9%    0.83
-GOLD      orb             36        30.6%    0.48    36        33.3%    1.30
-XBRUSD    orb             41        26.8%    0.59    33        39.4%    1.69
-BTCUSD    orb             39        30.8%    0.64    32        31.2%    0.39
-ETHUSD    orb             36        27.8%    0.64    35        28.6%    0.43
-```
-
-**Instrument-by-instrument reading:**
-
-| Instrument | Combined PF | L-PF | S-PF | Verdict |
-|------------|-------------|------|------|---------|
-| USDJPY | 1.27 | 1.33 | 1.22 | **Genuine two-way edge.** Both directions PF > 1.2. Jan-May 2026 yen volatility created session-range breakouts regardless of direction. |
-| DE40 | 1.62 | 2.31 | 1.02 | **LONG-regime driven.** Jan-May 2026 was broadly bullish German equities. LONG ORB trades ride intraday momentum; SHORT ORB trades fight the trend. S-PF barely > 1.0. |
-| UK100 | 1.19 | 1.77 | 0.83 | **LONG-regime driven.** Same equity bull regime. S-PF < 1.0 — the strategy is profitable overall only because LONG trades dominate. |
-| US500 | 1.03 | 0.98 | 1.12 | **Slight SHORT bias** (inverse of DE40/UK100). Interesting divergence — US500 ORB SHORT was more productive. Neither direction strong enough to trade. |
-| XBRUSD | 1.06 | 0.59 | 1.69 | **Strong SHORT bias.** Brent crude declined Jan-May 2026 — LONG ORB trades failed repeatedly; SHORT ORB trades caught the trend. Regime artifact. |
-| GOLD | 0.83 | 0.48 | 1.30 | **SHORT bias.** Gold trended lower in this window. Even the better direction (S-PF 1.30) is driven by regime. |
-| EURUSD | 0.80 | 1.21 | 0.55 | **LONG-only marginal edge.** Combined < 1.0; SHORT consistently unprofitable. Insufficient to trade. |
-| BTCUSD | 0.52 | 0.64 | 0.39 | No usable edge either direction. |
-| ETHUSD | 0.54 | 0.64 | 0.43 | No usable edge either direction. |
-| GBPUSD | 0.54 | 0.68 | 0.43 | No usable edge either direction. |
-| EURGBP | 0.44 | 0.22 | 0.69 | No usable edge either direction. |
-
-**Key takeaway — regime bias vs structural edge:**
-
-The directional split confirms that most ORB positive PF in this 14-week sample is regime-driven, not structural:
-
-- **USDJPY** is the only instrument with genuine two-way ORB edge (both L-PF and S-PF > 1.2). Yen volatility at session open tends to be structural — the Bank of Japan policy uncertainty generates real range breakouts independent of trend.
-- **DE40 / UK100** positive combined PF comes almost entirely from LONG trades in a bull equity regime. A similar 14-week bear leg would likely produce the mirror image (S-PF dominant, L-PF < 1.0). These instruments need multi-regime data to assess structural ORB edge.
-- **Commodities (GOLD, XBRUSD)** show the opposite directional bias to equities, consistent with the same risk-off/risk-on regime rotation. The SHORT edge in these instruments during Jan-May 2026 is not structural ORB logic — it is trend-riding.
-
-**Implication for backtesting:** 14 weeks of single-regime data cannot distinguish ORB structural edge from momentum. A meaningful test requires at least 6–12 months spanning both a bull and a bear phase. Until more data is available, instrument selection should be conservative: USDJPY is the only instrument with defensible two-way evidence.
+<!-- §6.4–6.9 (all empirical results) removed 2026-05-15 — see top banner -->
 
 ---
 
@@ -940,27 +761,7 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 | `0` trades on an instrument | No bars in DB for this epic | Run `fetch_ohlc.py` on Windows to populate |
 | AvgR positive but PF near 1.0 (e.g. 1.05) | P&L dominated by a few big winners, not consistent edge | Check individual trades; strategy may be high-variance / lucky |
 
-### 8.5 Instrument characteristics
-
-Based on the current 3-month M1 dataset:
-
-Empirically derived from baseline backtest (Jan–May 2026, M1):
-
-| Instrument | Momentum (PF / trades) | Mean Rev (PF / trades) | Verdict |
-|------------|----------------------|----------------------|---------|
-| EURUSD | 1.32 / 4 | 0.76 / 3 | Both: sample too small |
-| GBPUSD | 0.18 / 4 | 0.00 / 2 | Skip |
-| USDJPY | 0.01 / 5 | 1.45 / 4 | Both: sample too small |
-| EURGBP | 0.00 / 1 | 0.00 / 1 | Skip |
-| US500 | 0.35 / 13 | 0.50 / 16 | Skip — both negative |
-| DE40 | 0.46 / 22 | **1.48 / 25** | Mean rev viable; momentum no |
-| UK100 | **3.04 / 15** | 0.69 / 17 | Momentum promising (small sample) |
-| GOLD | **1.52 / 71** | 0.83 / 92 | Momentum viable; mean rev no |
-| XBRUSD | 0.97 / 201 | **1.15 / 226** | Mean rev marginal; momentum breakeven |
-| BTCUSD | 0.60 / 76 | 1.02 / 74 | Both poor; crypto too choppy |
-| ETHUSD | 0.96 / 116 | 0.99 / 116 | Both breakeven; skip |
-
-**Pattern:** Mean reversion works on range-bound instruments with moderate ATR (DE40, XBRUSD). Momentum works only on high-ATR instruments where large directional moves occur (GOLD, UK100). FX pairs generate too few signals at M1 for either strategy to be meaningful on a 3-month dataset.
+<!-- §8.5 (instrument result table) removed 2026-05-15 — see top banner -->
 
 ### 8.6 Reading AvgR
 
@@ -1032,9 +833,14 @@ The engine holds at most one position at a time. The live system allows up to `m
 
 P&L is in points, not currency. The backtest does not apply `target_risk_pct` or the vol-scaled sizing from `analyze_instrument`. All trades contribute equally to `profit_factor` and `max_drawdown_pct` regardless of the intended position size.
 
-### 9.5 Time exit not active
+### 9.5 Time exit — backtest session model
 
-The engine passes `session_end_time=None` to `evaluate_position()`, so the time-exit rule never fires. Trades in the backtest remain open until a price-based exit or end of data. Live trades may be closed earlier by the time exit.
+**Resolved & implemented 2026-05-15.** Previously the engine
+passed `session_end_time=None`, so time-exit never fired and momentum/ORB held
+multi-day/multi-week positions — the defect that invalidated all prior results. The
+engine now supplies a per-day `session_end_time` from `--session-close-utc` (default
+21:00 UTC) and injects bar-time as `now`. Remaining approximation: a *single global*
+close time, not per-instrument exchange hours (a documented future refinement).
 
 ### 9.6 Data coverage gaps
 

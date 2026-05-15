@@ -1,5 +1,6 @@
 name: orb
 description: "Opening Range Breakout — 2-bar (30-min) OR defines range; stop at OR boundary; 2×OR-width TP"
+resolution: M15       # ORB is defined on M15 bars. Source of truth for live monitor + backtest.
 
 entry:
   min_size: 0.1
@@ -12,10 +13,7 @@ risk:
     default_pct: 0.5    # fallback only — OR-width stop from get_entry_levels() takes precedence
     max_pct: 2.0
   trailing_stop:
-    enabled: true
-    min_distance_pct: 0.3
-    max_distance_pct: 1.5
-    update_interval_min: 1
+    enabled: false             # ORB: OR-width stop + fixed 2×OR-width TP only (RESEARCH; catalog §13)
   take_profit:
     dynamic: true
     min_rr_ratio: 2.0

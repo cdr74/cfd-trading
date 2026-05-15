@@ -308,16 +308,9 @@ regime:
 
 ### ORB Structural Findings
 
-**Opening Range Breakout has genuine edge on European equity indices and USDJPY; it does not on FX pairs, crypto, or commodities.**
+**Hypothesis (test against the clean re-baseline `audit/RESULTS.md`):** Opening Range Breakout *should* have structural edge on European equity indices and USDJPY, and little on FX pairs, crypto, or commodities — for the mechanism reasons below.
 
-| Instrument | ORB v2 PF | ORB v2 Win% | Assessment |
-|---|---|---|---|
-| DE40 | 1.62 | 39.4% | Clear edge — Xetra open (08:00 UTC) is a hard liquidity event |
-| UK100 | 1.19 | 42.0% | Clear edge — LSE open (08:00 UTC) |
-| USDJPY | 1.27 | 36.8% | Edge present — tight spreads relative to OR width |
-| US500 | 1.03 | 40.3% | Borderline — NYSE open (14:30 UTC) structural support, but Capital.com spread erodes it |
-| EURUSD / GBPUSD | 0.80 / 0.54 | 31% / 26% | No edge — London FX open is a soft ramp, not a discrete auction |
-| BTCUSD / ETHUSD | 0.52 / 0.54 | 31% / 28% | No edge — no session open structure on 24/7 instruments |
+> **⚠️ Empirical PF/Win% table removed 2026-05-15** — produced by the old (time-exit-disabled) engine. The structural reasoning below is retained; current numbers live in the clean re-baseline (`audit/RESULTS.md`, `audit/ranked_cells.csv`) from the rebuilt engine.
 
 **Why equity indices respond to ORB:**  
 The Xetra and LSE auction process creates genuine order flow imbalance at 08:00 UTC — accumulated overnight orders clear at the open, driving directional momentum that tends to persist for the first session hour. This is the mechanism Zarattini & Aziz documented on US equity index futures (ES, NQ). DE40 and UK100 exhibit the same structural property.
@@ -339,10 +332,7 @@ Stop at OR low (LONG) / OR high (SHORT) is correct — it is the natural invalid
 
 The OR width itself is a session-calibrated ATR proxy. Setting TP at 2×OR-width is therefore already an ATR-relative target, making the additional per-bar ATR computation redundant. The M15 ATR(14) is more variable and at 1.5× typically tighter than 2×OR-width, causing premature exits.
 
-| Approach | DE40 PF | UK100 PF | USDJPY PF |
-|---|---|---|---|
-| v2: 2×OR-width TP | **1.62** | **1.19** | **1.27** |
-| v3: 1.5×ATR trailing | 1.46 | 1.10 | 1.22 |
+> **⚠️ Empirical PF table removed 2026-05-15** (old time-exit-disabled engine). The qualitative finding — 1.5×ATR trailing tends to exit ORB winners early because OR-width is already a session-calibrated ATR proxy — drove the decision to **disable ORB trailing** in the rebuild (`orb.yaml trailing_stop.enabled: false`; catalog §13). Current ORB numbers: `audit/RESULTS.md`.
 
 **Recommendation:** Retain the fixed 2×OR-width TP as the primary target. If ATR-trailing is revisited, use a larger multiplier (≥ 3.0×) or combine: ATR trail as a floor, OR-width TP as a cap.
 
@@ -353,11 +343,7 @@ The OR width itself is a session-calibrated ATR proxy. Setting TP at 2×OR-width
 Initial analysis flagged DE40, UK100, and USDJPY as the best performers (PF > 1.1). However, restricting to these three is selection bias — the backtest window (Jan–May 2026) was a single bullish equity regime, and a simple "buy Feb 1, sell May" trade would have been profitable on UK100/USDJPY. An algorithm needs to demonstrate edge in adverse scenarios too.
 
 **Directional split analysis** exposes the regime artifact:
-- **DE40:** L-PF 2.31 / S-PF 1.02 — positive combined PF driven entirely by LONG trades in a bull regime
-- **UK100:** L-PF 1.77 / S-PF 0.83 — same pattern; SHORT ORB was unprofitable
-- **USDJPY:** L-PF 1.33 / S-PF 1.22 — **only instrument with genuine two-way edge** (both directions PF > 1.2)
-- **GOLD:** L-PF 0.48 / S-PF 1.30 — SHORT bias consistent with gold declining in this period
-- **XBRUSD:** L-PF 0.59 / S-PF 1.69 — strong SHORT bias consistent with oil declining
+> **⚠️ Per-instrument directional PF figures removed 2026-05-15** (time-exit-disabled engine). The methodological point this section makes — that in-sample PF over a single bullish window is selection bias, and long-only bull-regime trades can masquerade as edge — stands and is retained below.
 
 **Current decision: no instrument filter.** The backtest runs all instruments with the directional split output visible. Until we have multi-regime data (6–12 months spanning both bull and bear phases), instrument selection based on in-sample PF is overfit. USDJPY is the only instrument with evidence of structural two-way ORB edge at this time.
 

@@ -2,8 +2,8 @@
 
 Values taken from Capital.com published spread table (2026-05).
 Used by:
-  - backtest/engine.py  — adjusts entry/exit fill prices by spread/2
-  - backtest/signals.py — ATR(14) ≥ 4 × spread gate in MeanReversionSignalState
+  - backtest/engine.py        — adjusts entry/exit fill prices by spread/2
+  - strategy/signal_engine.py — ATR(14) ≥ 4 × spread gate in MeanReversionSignalState
 
 FX spreads are expressed as decimal price units (1 pip = 0.0001 for EUR/USD,
 0.01 for USD/JPY).  Index / commodity spreads are in index points or USD.

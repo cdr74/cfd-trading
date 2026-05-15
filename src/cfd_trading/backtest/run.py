@@ -68,18 +68,22 @@ def main() -> None:
     strategies = _resolve_strategies(args, config_dir)
     epics = _resolve_epics(args, config_dir)
     risk_config = _load_risk(config_dir)
-    period = _parse_resolution(args.resolution)
     source_period = _parse_resolution(args.source_resolution)
-    if source_period > period:
-        print(f"ERROR: --source-resolution ({args.source_resolution}) is coarser than "
-              f"--resolution ({args.resolution}). Cannot aggregate up.", file=sys.stderr)
-        sys.exit(1)
 
     conn = get_connection(db_path)
 
     results: list[BacktestResult] = []
     for strategy_name in strategies:
         strat = load_strategy(strategy_name, config_dir)
+        # Resolution: explicit CLI override, else the strategy's own YAML value
+        # (single source of truth, shared with the live monitor).
+        eff_res = args.resolution or strat.resolution
+        period = _parse_resolution(eff_res)
+        if source_period > period:
+            print(f"ERROR: --source-resolution ({args.source_resolution}) is coarser "
+                  f"than resolution ({eff_res}) for {strategy_name}. Cannot aggregate "
+                  f"up.", file=sys.stderr)
+            sys.exit(1)
         for epic in epics:
             if not _instrument_allowed(epic, strat.config):
                 print(f"  [skip] {epic}/{strategy_name} — not in strategy instrument list")
@@ -96,10 +100,11 @@ def main() -> None:
             # M30 gate is self-defeating until true M30 bars are available (see BACKTESTING.md §4.1)
             signal_kwargs = _build_signal_kwargs(strategy_name, args, epic)
             result = run_backtest(epic, strategy_name, bars, strat.config, risk_config,
-                                  spread_pts=sp, signal_kwargs=signal_kwargs)
+                                  spread_pts=sp, signal_kwargs=signal_kwargs,
+                                  session_close_utc=args.session_close_utc)
             # Stamp resolution on each trade — the engine doesn't know it.
             for t in result.trades:
-                t.resolution = args.resolution
+                t.resolution = eff_res
             results.append(result)
 
     conn.close()
@@ -138,8 +143,10 @@ def _parse_args() -> argparse.Namespace:
     strat_group.add_argument("--all-strategies", action="store_true", help="Run all available strategies")
 
     p.add_argument(
-        "--resolution", default="M1",
-        help="Target bar resolution: M1 M5 M15 M30 M60 (default: M1). "
+        "--resolution", default=None,
+        help="Target bar resolution: M1 M5 M15 M30 M60. Default: the strategy's "
+             "own `resolution:` from its YAML (single source of truth, shared with "
+             "the live monitor). Pass this only to override for an experiment. "
              "Source bars are aggregated to this in-process if needed.",
     )
     p.add_argument(
@@ -158,6 +165,13 @@ def _parse_args() -> argparse.Namespace:
         help="Audit-mode momentum filter relaxation: ADX threshold 20 (from 25) "
              "and EMA gap floor 0.02%% (from 0.05%%). Used in Phase A2 to lift "
              "momentum trade counts to a statistically sliceable density.",
+    )
+    p.add_argument(
+        "--session-close-utc", metavar="HH:MM", default="21:00",
+        help="Daily intraday close (UTC), applied every simulated day to every "
+             "instrument. The per-strategy time_exit flattens "
+             "close_minutes_before_session_end before it; no overnight/weekend "
+             "holds. Default 21:00. See BACKTESTING.md §5.6.",
     )
     return p.parse_args()
 

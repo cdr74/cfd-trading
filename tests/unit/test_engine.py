@@ -286,22 +286,12 @@ class TestMetrics:
         # After 16 bars of 1.5 accumulate in the 20-bar window the mean rises to 1.4
         # and z drops to 0.5 → check_exit fires "Z-score midline".
         # window at bar 34: [1.0]*4 + [1.5]*16, mean=1.4, sigma=0.2, z=0.5
-        # max_hold_bars raised to 50 so the hold cap does not fire before the midline.
+        # (Hold-cap removed 2026-05-15 — midline is now the only signal-exit.)
         bars = _bars([1.0] * 19 + [1.5] * 17)   # 36 bars; midline fires at bar 34
-
-        result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG,
-                              signal_kwargs={"max_hold_bars": 50})
-        assert result.total_trades == 1
-        assert result.trades[0].exit_reason == "Z-score midline"
-
-    def test_hold_cap_closes_mean_reversion_trade(self, mean_rev_cfg):
-        # SHORT at bar 19 (spike to 1.5). Entry at bar 20. Price stays at 1.5.
-        # Default max_hold_bars=5: hold cap fires after bars 20–24 (5 bars in trade).
-        bars = _bars([1.0] * 19 + [1.5] * 10)
 
         result = run_backtest("EURUSD", "mean_reversion", bars, mean_rev_cfg, RISK_CFG)
         assert result.total_trades == 1
-        assert result.trades[0].exit_reason == "Hold cap"
+        assert result.trades[0].exit_reason == "Z-score midline"
 
     def test_spread_adjusts_buy_entry_and_exit(self, momentum_cfg):
         # BUY at next_bar.open=1.10 with spread_pts=0.10:
@@ -524,3 +514,80 @@ class TestAuditFields:
         cost = trade.spread_at_entry                        # 0.10 (full spread)
         net_pnl_recovered = gross_pnl - cost
         assert net_pnl_recovered == pytest.approx(trade.pnl_points, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — session model: time-exit, no overnight/weekend, no-trade window
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+
+
+def _uts(y, mo, d, h, mi) -> int:
+    return int(_dt.datetime(y, mo, d, h, mi, tzinfo=_dt.timezone.utc).timestamp())
+
+
+def _mom_session_cfg():
+    return {
+        "risk": {
+            "stop_loss": {"type": "HARD", "default_pct": 2.0, "max_pct": 5.0},
+            "trailing_stop": {"enabled": False},
+            "take_profit": {"dynamic": True, "min_rr_ratio": 1.5},
+            "time_exit": {"enabled": True, "close_minutes_before_session_end": 30},
+        }
+    }
+
+
+class TestSessionModel:
+    _KW = {"adx_threshold": 0.0, "m30_gate": False}
+
+    def _mom_bars(self, prices, start, step_s=900):
+        return [
+            OHLCBar(epic="EURUSD", resolution="M15",
+                    ts=start + i * step_s, open=p, high=p, low=p, close=p, volume=100)
+            for i, p in enumerate(prices)
+        ]
+
+    def test_time_exit_fires_at_daily_close(self):
+        # 21 flat + spike → LONG; entry next bar; then flat through 21:00 UTC.
+        start = _uts(2026, 5, 15, 8, 0)
+        prices = [1.0] * 21 + [1.10] + [1.10] * 40
+        bars = self._mom_bars(prices, start)
+        result = run_backtest("EURUSD", "momentum", bars, _mom_session_cfg(),
+                              RISK_CFG, signal_kwargs=self._KW,
+                              session_close_utc="21:00")
+        assert result.total_trades == 1
+        t = result.trades[0]
+        assert t.exit_reason.startswith("Time exit")
+        # Closed at/after 20:30 UTC (session_end 21:00 − 30 min), same day
+        assert _dt.datetime.fromtimestamp(t.exit_ts, _dt.timezone.utc) \
+            >= _dt.datetime(2026, 5, 15, 20, 30, tzinfo=_dt.timezone.utc)
+
+    def test_no_overnight_hold_when_no_close_window_bar(self):
+        # Position opens, one in-trade bar, then the series jumps to the NEXT
+        # UTC day with no bar in the close window → forced flat at prior bar.
+        start = _uts(2026, 5, 15, 9, 0)
+        bars = self._mom_bars([1.0] * 21 + [1.10, 1.10], start)   # last in-trade bar ~14:15
+        bars.append(OHLCBar(epic="EURUSD", resolution="M15",
+                            ts=_uts(2026, 5, 16, 9, 0), open=1.10, high=1.10,
+                            low=1.10, close=1.10, volume=100))
+        result = run_backtest("EURUSD", "momentum", bars, _mom_session_cfg(),
+                              RISK_CFG, signal_kwargs=self._KW,
+                              session_close_utc="21:00")
+        assert result.total_trades == 1
+        t = result.trades[0]
+        assert t.exit_reason == "Session close (no bar at threshold)"
+        # Flattened on day 1, never carried into 2026-05-16
+        assert _dt.datetime.fromtimestamp(t.exit_ts, _dt.timezone.utc).date() \
+            == _dt.date(2026, 5, 15)
+
+    def test_no_new_entry_inside_no_trade_window(self):
+        # Crossover bar placed so the entry bar (i+1) lands at 20:45 UTC, inside
+        # the 30-min no-trade window before the 21:00 close → entry suppressed.
+        entry_ts = _uts(2026, 5, 15, 20, 45)
+        start = entry_ts - 22 * 900   # 22 bars before the entry bar
+        bars = self._mom_bars([1.0] * 21 + [1.10] + [1.10], start)
+        result = run_backtest("EURUSD", "momentum", bars, _mom_session_cfg(),
+                              RISK_CFG, signal_kwargs=self._KW,
+                              session_close_utc="21:00")
+        assert result.total_trades == 0

@@ -228,12 +228,60 @@ Rules are evaluated in priority order every `MONITOR_INTERVAL_SECONDS` (default 
 | Priority | Rule | Condition | Action |
 |----------|------|-----------|--------|
 | 1 | Hard stop | Price crosses `stop_loss.value` | CLOSE |
-| 2 | Trailing stop ratchet | Price moved favourably by `min_distance_pct` | ADJUST (ratchet only — never widens) |
+| 2 | Trailing stop ratchet | momentum: distance = ATR₁₄@entry × 1.5 (fixed for trade), ratchet only; MR & ORB: disabled | ADJUST (ratchet only — never widens) |
 | 3 | Take profit | Price reaches `take_profit.initial_value` | CLOSE |
-| 4 | Time exit | `session_end - close_minutes_before_session_end` | CLOSE |
-| 5 | Default | None of the above | HOLD |
+| 4 | **Signal exit** | Deterministic signal reversal for the position's strategy (see below) | CLOSE |
+| 5 | Time exit | `session_end - close_minutes_before_session_end` | CLOSE |
+| 6 | Default | None of the above | HOLD |
 
 All decisions are written to `cycle_snapshots` (DB) and `audit.jsonl` (ADJUST/CLOSE only).
+
+**Rule 4 — Signal exit (added & implemented 2026-05-15).**
+Previously the monitor did no indicator math and signal-based bail-out was left to
+Claude in the scan/analyze conversation — which runs on no fixed cadence, so a
+losing trade could sit until the hard stop. Rule 4 makes signal-bail a deterministic,
+every-60s monitor rule. Per-strategy predicate:
+
+| Strategy | Signal-exit predicate | Source |
+|---|---|---|
+| `mean_reversion` | `|z| ≤ zscore_exit_threshold` (z returned to midline → take the reversion) | exists in signal state today (`check_exit`) |
+| `momentum` | EMA-fast crosses back through EMA-slow against the open position (trend over) | **new predicate** — must be written (today returns `None`) |
+| `orb` | none — the breakout is one-shot per session; no reversal to bail on | `None` (correct as-is) |
+
+The signal logic is **streaming/stateful** (incremental per-bar deques + ADX/EMA
+state). It is promoted out of the backtest package into a **shared module
+(`strategy/signal_engine.py`) imported by both `monitor.py` and the backtest engine** —
+one implementation, so live and backtest cannot drift. The monitor therefore changes
+from fetching one price bar per cycle to: on start/restart, **back-fill a warm-up
+window** per open-position epic at the strategy's bar resolution and replay it to
+build the signal state; each cycle, fetch the new bar(s), `update()` the state, then
+evaluate the rules. State is kept per `dealId` for the monitor process lifetime and
+deterministically re-seeded on restart.
+
+**3c implementation resolutions (decided & implemented 2026-05-15):**
+
+- **O1 — bar resolution is a strategy property.** Each strategy YAML carries
+  `resolution:` (momentum `M1`, mean_reversion `M1`, orb `M15` — the catalog-intended
+  horizons). The live monitor and the backtest runner both read it as the single
+  source of truth; the backtest CLI `--resolution` remains an explicit experiment
+  override. (Open, owner = operator: momentum's M1 horizon vs. ~3.5-month M1 data
+  coverage — the strict-default 44-trade/3-yr result is most likely this
+  resolution/parameter mismatch, not the algorithm. Tracked for a dedicated review.)
+- **O2 — `entry_atr` is captured during the O3 warm-up backfill** (collapsed into
+  O3; *no* trades-DB schema change, *no* execution-tool change). The monitor's
+  first-sighting/restart backfill replays a window that starts *before* the
+  position's `entry_ts`; `signal_state.atr` is snapshotted at the entry bar. Because
+  this is the same shared `signal_engine` the backtest uses, the value is
+  bit-identical to the backtest's `entry_atr` — exact parity, zero extra hot-path
+  cost (it is the already-required backfill replay), restart-deterministic.
+- **O3 — only momentum & mean_reversion get live signal state.** ORB's
+  `check_exit()` is always `None` and ORB trailing is disabled, so the monitor
+  passes `signal_state=None` for ORB and skips warm-up/session wiring for it; ORB
+  exits via the price/time rules (hard stop / TP / time-exit) exactly as before.
+
+The time-exit rule reads "now" from an injectable parameter (default = real UTC clock,
+so live is unchanged). The backtest injects bar time — see §3.10. Same code path,
+same priority order, both contexts.
 
 ### 3.8 Strategy Pluggability
 
@@ -251,15 +299,47 @@ The planned fix is a `BrokerClient` Protocol in `broker/protocol.py` with normal
 
 ### 3.10 Backtesting Architecture
 
-The live entry decision (Claude reasoning) cannot be replayed at scale. The backtest uses deterministic rule-based approximations of the entry signals, then reuses the identical `monitor.py` rule engine for exits.
+> **Status:** Redesigned **and implemented** 2026-05-15 after the time-exit fidelity
+> defect (the engine never passed `session_end_time`, so intraday close never fired
+> and momentum/ORB held multi-day/multi-week positions). Engine + monitor now share
+> this exit path (Phases 3–5 done; live==backtest parity test in
+> `tests/unit/test_parity.py`). All prior backtest results were invalidated/deleted
+> and a clean re-baseline regenerated (`audit/RESULTS.md`).
+
+After the 2026-05-15 redesign the **entire exit path is deterministic and shared** —
+hard stop, trailing, TP, **signal-exit (§3.7 rule 4)**, and time-exit all run through
+one code path used by both the live monitor and the backtest. Only the *entry*
+decision is non-replayable (Claude's reasoning), and is approximated.
+
+**Fidelity contract:**
 
 | Layer | Live | Backtest |
 |-------|------|---------|
-| Entry | Claude reasons over `analyze_instrument` | Deterministic rules: EMA crossover / z-score threshold |
-| Exit | `monitor.py` rule engine | Same `evaluate_position()` function, bar-by-bar |
-| Data | Capital.com API | Local SQLite `ohlc_bars` (populated by `backtest/fetch_ohlc.py` via MT5 on Windows) |
+| Entry | Claude reasons over `analyze_instrument` | Deterministic proxy: EMA crossover / z-score / ORB — acknowledged approximation of Claude's entry |
+| Exit | mechanical monitor: hard stop → trailing → TP → signal-exit → time-exit | **identical rules, same shared code** (`evaluate_position` + `signal_engine`) |
+| Session | Human sets `session_end_time` at `start_session`; monitor closes 30 min before | Global `session_close_utc` (default **21:00 UTC**) per simulated UTC day; same time-exit |
+| Data | Capital.com API | Local SQLite `ohlc_bars` (MT5 fetch on Windows) |
 
-OHLC data comes from MetaTrader 5 connected to the Capital.com demo account — the only source that provides the full 3-month, 1-min history for all watchlist instruments. The `BACKTEST_MODE=true` env var blocks all live API calls at the `CapitalClient` level during backtest runs.
+The earlier "mechanical-monitor floor / MR scores worse than live" caveat is
+**superseded**: the z-midline reversion exit (and momentum's cross-back) are now
+first-class deterministic monitor rules present in *both* live and backtest, not a
+discretionary Claude action the backtest omits. The only residual divergence is the
+entry approximation and any ad-hoc human CLOSE outside the defined rules. The former
+backtest-only `check_exit()` hold-cap hack is dropped; its useful half (z-midline) is
+promoted into the shared `signal_engine`.
+
+**Backtestable time-exit.** `evaluate_position()` gains an optional injected
+`now: datetime` (default `None` → `datetime.now(UTC)`, so live behaviour is unchanged).
+The backtest passes the current bar's UTC timestamp; each simulated UTC day's
+`session_end_time` = that date at `session_close_utc`, and the existing per-strategy
+`time_exit.close_minutes_before_session_end` (30) flattens before it. No position is
+ever carried overnight or over a weekend. A unit test asserts the live path and the
+backtest path return identical `(action, reason, stop)` on shared fixtures — the
+anti-drift guarantee.
+
+OHLC data comes from MetaTrader 5 on the Capital.com demo account. The
+`BACKTEST_MODE=true` env var blocks all live API calls at the `CapitalClient` level
+during backtest runs.
 
 See `docs/BACKTESTING.md` for full data layer detail, engine design, test suite, and results guide.
 
@@ -491,7 +571,7 @@ ohlc_bars (
 | 7 | GitHub Actions CI | **Done** | Unit tests always; integration tests on push with demo secrets; `publish.yml` builds + pushes container image |
 | 8 | Container deployment + MCP wiring | **Done** | Podman container on port 8089; Claude Desktop wired; SM-01–SM-11 smoke tests passed |
 | 9 | Scan/analysis improvements | **Done** | Removed session labels; added EMA_9/21 + z-score to `analyze_instrument`; vol-scaled `suggested_size` via `target_risk_pct` |
-| 10 | Backtesting framework | **Done** | `fetch_ohlc.py` (Windows/MT5, 1.1M bars); engine + signals + CLI runner; EMA gap filter; incremental O(n) signal state (17s full matrix); AvgR expectancy metric; ADX(14) regime gate; z-score midline exit; 215 unit tests total |
+| 10 | Backtesting framework | **Rebuilt (2026-05-15)** | `fetch_ohlc.py` (Windows/MT5); engine + shared `signal_engine` + CLI runner. The old engine never wired the intraday time-exit (all prior results invalidated/deleted). Rebuilt so the engine and the live monitor share ONE deterministic exit path — hard stop → ATR trailing → TP → signal-exit → time-exit (§3.7/§3.10); global `--session-close-utc` session model; resolution is a strategy YAML property. 329 unit tests incl. live↔backtest parity (`tests/unit/test_parity.py`). Clean 3-yr re-baseline regenerated. |
 
 ---
 

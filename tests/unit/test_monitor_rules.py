@@ -379,3 +379,156 @@ def test_no_stop_level_skips_hard_stop(momentum_cfg):
     )
     # Without a stop level, hard stop check is skipped; may trigger take profit or hold
     assert action in ("HOLD", "CLOSE")
+
+
+# ---------------------------------------------------------------------------
+# now-injection — time-exit must be deterministic (no wall-clock dependency)
+# ---------------------------------------------------------------------------
+
+class TestNowInjection:
+    def test_time_exit_fires_with_injected_now(self, mean_rev_cfg):
+        end = datetime(2026, 5, 15, 21, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 15, 20, 45, tzinfo=timezone.utc)  # 15 min left ≤ 30
+        action, reason, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            session_end_time=end, now=now,
+        )
+        assert action == "CLOSE" and reason.startswith("Time exit")
+
+    def test_time_exit_not_fired_when_far_from_close(self, mean_rev_cfg):
+        end = datetime(2026, 5, 15, 21, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)  # 9h left
+        action, _, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            session_end_time=end, now=now,
+        )
+        assert action == "HOLD"
+
+    def test_now_none_uses_real_clock_live_unchanged(self, mean_rev_cfg):
+        # session ends in 2h, no now passed → real clock → not within 30-min window
+        action, _, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            session_end_time=_session_end(120),
+        )
+        assert action == "HOLD"
+
+
+# ---------------------------------------------------------------------------
+# Rule 4 — signal-exit (shared signal_engine state)
+# ---------------------------------------------------------------------------
+
+class _FakeSignal:
+    def __init__(self, reason=None):
+        self._reason = reason
+    def check_exit(self):
+        return self._reason
+
+
+class TestSignalExitRule:
+    def test_signal_exit_closes_when_state_signals(self, mean_rev_cfg):
+        action, reason, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            signal_state=_FakeSignal("Z-score midline"),
+        )
+        assert action == "CLOSE" and reason == "Z-score midline"
+
+    def test_no_signal_state_skips_rule(self, mean_rev_cfg):
+        action, _, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            signal_state=None,
+        )
+        assert action == "HOLD"
+
+    def test_hard_stop_takes_priority_over_signal_exit(self, mean_rev_cfg):
+        # bid at 1.0600 ≤ stop 1.0700 → hard stop must win over the signal-exit
+        action, reason, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0600), mean_rev_cfg,
+            signal_state=_FakeSignal("Z-score midline"),
+        )
+        assert action == "CLOSE" and reason.startswith("Hard stop")
+
+    def test_signal_exit_before_time_exit(self, mean_rev_cfg):
+        # Far from session close → time-exit inert; signal-exit should fire
+        end = datetime(2026, 5, 15, 21, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+        action, reason, _ = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.0950),
+            _price(1.0820), mean_rev_cfg,
+            session_end_time=end, now=now,
+            signal_state=_FakeSignal("EMA cross-back"),
+        )
+        assert action == "CLOSE" and reason == "EMA cross-back"
+
+
+# ---------------------------------------------------------------------------
+# Rule 2 — ATR trailing (fixed distance at entry, ratchet-only)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def atr_trail_cfg():
+    return {
+        "risk": {
+            "stop_loss": {"type": "HARD", "max_pct": 5.0},
+            "trailing_stop": {"enabled": True, "atr_multiplier": 1.5},
+            "take_profit": {"dynamic": False, "min_rr_ratio": 1.5},
+            "time_exit": {"enabled": True, "close_minutes_before_session_end": 30},
+        }
+    }
+
+
+class TestATRTrailing:
+    def test_long_atr_trail_ratchets_up(self, atr_trail_cfg):
+        # entry_atr=0.0010, mult 1.5 → dist 0.0015; peak 1.0900 → candidate 1.0885
+        # current stop 1.0750 → 1.0885 > 1.0750 → ADJUST
+        action, reason, new_stop = evaluate_position(
+            _long_position(stop_level=1.0750, profit_level=1.2000),
+            _price(1.0895), atr_trail_cfg,
+            entry_atr=0.0010, peak_price=1.0900,
+        )
+        assert action == "ADJUST"
+        assert new_stop == pytest.approx(1.0885, abs=1e-9)
+        assert "ATR" in reason
+
+    def test_long_atr_trail_no_widen(self, atr_trail_cfg):
+        # candidate 1.0885 < current stop 1.0890 → must NOT widen → not ADJUST
+        action, _, _ = evaluate_position(
+            _long_position(stop_level=1.0890, profit_level=1.2000),
+            _price(1.0895), atr_trail_cfg,
+            entry_atr=0.0010, peak_price=1.0900,
+        )
+        assert action != "ADJUST"
+
+    def test_short_atr_trail_ratchets_down(self, atr_trail_cfg):
+        # SELL: dist 0.0015; peak(low) 1.0700 → candidate 1.0715; stop 1.0850 →
+        # 1.0715 < 1.0850 → ADJUST
+        action, reason, new_stop = evaluate_position(
+            _short_position(stop_level=1.0850, profit_level=0.9000),
+            _price(bid=1.0704, ask=1.0705), atr_trail_cfg,
+            entry_atr=0.0010, peak_price=1.0700,
+        )
+        assert action == "ADJUST"
+        assert new_stop == pytest.approx(1.0715, abs=1e-9)
+
+    def test_atr_path_inactive_without_entry_atr(self, atr_trail_cfg):
+        # atr_multiplier set but no entry_atr/peak → ATR path skipped; no fixed-%
+        # fields configured → no trailing ADJUST (HOLD or other rule)
+        action, _, _ = evaluate_position(
+            _long_position(stop_level=1.0750, profit_level=1.2000),
+            _price(1.0895), atr_trail_cfg,
+        )
+        assert action != "ADJUST"
+
+    def test_fixed_pct_path_still_used_without_atr_multiplier(self, momentum_cfg):
+        # momentum_cfg has min_distance_pct and NO atr_multiplier → legacy path
+        action, reason, new_stop = evaluate_position(
+            _long_position(stop_level=1.0700, profit_level=1.2000),
+            _price(1.0900), momentum_cfg,
+        )
+        assert action == "ADJUST"
+        assert "ATR" not in reason  # legacy fixed-% path

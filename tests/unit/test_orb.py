@@ -1,8 +1,8 @@
-"""Unit tests for ORBSignalState in backtest/signals.py."""
+"""Unit tests for ORBSignalState in strategy/signal_engine.py."""
 
 import pytest
 from cfd_trading.storage.repository import OHLCBar
-from cfd_trading.backtest.signals import ORBSignalState
+from cfd_trading.strategy.signal_engine import ORBSignalState
 
 # All tests use session open at 08:00 UTC (seconds_in_day = 28800)
 _SESSION_HOUR   = 8
@@ -192,7 +192,7 @@ class TestORBInterface:
     def test_notify_entry_no_op(self):
         state = _state()
         _setup_or(state)
-        state.notify_entry()   # should not raise
+        state.notify_entry("BUY")   # accepts direction; no-op for ORB
 
     def test_notify_exit_no_op(self):
         state = _state()

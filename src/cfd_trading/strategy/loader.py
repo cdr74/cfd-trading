@@ -27,6 +27,13 @@ class Strategy:
     config: dict        # parsed YAML contents
     prompt: str         # contents of <name>.md
 
+    @property
+    def resolution(self) -> str:
+        """Bar resolution this strategy operates on — single source of truth for
+        both the live monitor and the backtest runner. Defaults to M1 if the
+        YAML omits it (legacy/test strategies)."""
+        return self.config.get("resolution", "M1")
+
 
 def load_strategy(name: str, config_dir: Path) -> Strategy:
     """Load and validate a strategy YAML + MD pair by name."""

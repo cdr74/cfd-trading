@@ -1,5 +1,6 @@
 name: mean_reversion
 description: Range-bound strategy targeting overextended moves with fixed take profit
+resolution: M1        # catalog horizon (20-bar z on 1-min). Source of truth for live monitor + backtest.
 
 entry:
   min_size: 0.1

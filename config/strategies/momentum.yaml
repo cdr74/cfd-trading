@@ -1,5 +1,6 @@
 name: momentum
 description: Trend-following strategy targeting breakouts with trailing stop management
+resolution: M1        # catalog horizon (EMA9/21 on 1-min). Source of truth for live monitor + backtest.
 
 entry:
   min_size: 0.1
@@ -13,8 +14,7 @@ risk:
     max_pct: 5.0
   trailing_stop:
     enabled: true
-    min_distance_pct: 0.5
-    max_distance_pct: 3.0
+    atr_multiplier: 1.5        # distance = ATR14@entry × 1.5, fixed for the trade, ratchet-only
     update_interval_min: 1
   take_profit:
     dynamic: true

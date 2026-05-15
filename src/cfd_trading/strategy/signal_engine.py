@@ -1,27 +1,30 @@
-"""Entry signal state for backtesting.
+"""Shared deterministic signal engine — used by BOTH the live monitor and the backtest.
 
-Each class maintains running indicator state and produces LONG/SHORT/None on
-each new bar in O(1) time.  Create a fresh instance per instrument/strategy run.
+Single source of truth for entry signals and the signal-exit rule (SYSTEM_DESIGN
+§3.7 rule 4), so the live and backtest exit paths cannot drift. Each class
+maintains running indicator state and produces LONG/SHORT/None on each new bar in
+O(1) time. Create a fresh instance per instrument/strategy run; the live monitor
+back-fills a warm-up window then feeds one bar per cycle.
 
   MomentumSignalState    — incremental EMA9/EMA21 crossover + gap filter + slope
                            + ADX(14) regime gate (suppressed when ADX < threshold)
                            + M30 directional bias gate (blocks entries against 30-bar trend)
-                           + notify_entry/notify_exit (no-ops; satisfy shared interface)
+                           + check_exit(): EMA cross-back against the open position
   MeanReversionSignalState — rolling 20-bar z-score threshold
                              + ADX(14) regime gate (suppressed when ADX >= threshold)
                              + ATR(14) ≥ 4× spread gate (skips low-vol entries)
-                             + check_exit(): hold cap (max_hold_bars) then z-score midline
-                             + notify_entry/notify_exit for hold-cap bar counting
+                             + check_exit(): z-score returned to midline
   ORBSignalState           — Opening Range Breakout on aggregated bars (designed for M15)
                              First `or_bars` bars (default 2 = 30 min) define OR high/low
                              Break above OR high → LONG; break below OR low → SHORT
                              Stop at OR low (LONG) / OR high (SHORT) via get_entry_levels()
                              One signal per session; resets on each new session open
-                             check_exit() → None; notify_entry/notify_exit are no-ops
+                             check_exit() → None (one-shot breakout; no reversal)
 
-The functional wrappers (momentum_signal, mean_reversion_signal) are kept as
-conveniences for unit tests.  The backtest engine uses the stateful classes
-directly to achieve O(n) instead of O(n²) complexity.
+Shared interface (all classes): `update(bar) -> "LONG"|"SHORT"|None`,
+`check_exit() -> reason|None`, `notify_entry(direction)`, `notify_exit()`.
+`direction` is the broker side, "BUY" or "SELL". The functional wrappers
+(momentum_signal, mean_reversion_signal) are unit-test conveniences.
 """
 
 from collections import deque
@@ -189,6 +192,8 @@ class MomentumSignalState:
         self._slope_buf: deque[float]   = deque(maxlen=self._SLOPE_WINDOW)
         self._m30_buf:   deque[OHLCBar] = deque(maxlen=self._M30_WINDOW)
         self._adx_state = _ADXState(adx_period)
+        self._position_dir: str | None = None   # "BUY"/"SELL" while a trade is open
+        self._last_xover:   str | None = None   # raw EMA crossover on the latest bar
 
     def update(self, bar: OHLCBar) -> str | None:
         """Consume one bar; return 'LONG', 'SHORT', or None."""
@@ -222,7 +227,15 @@ class MomentumSignalState:
             self._ema21 = self._ALPHA21 * close + (1 - self._ALPHA21) * self._ema21
 
         if self._n < self._MIN_BARS:
+            self._last_xover = None
             return None
+
+        # Raw EMA crossover for THIS bar — computed before the entry gates so the
+        # signal-exit rule (check_exit) can see a cross-back even when the entry
+        # filters (ADX / gap / M30) would suppress a fresh entry signal.
+        crossed_long  = self._prev_ema9 <= self._prev_ema21 and self._ema9 > self._ema21
+        crossed_short = self._prev_ema9 >= self._prev_ema21 and self._ema9 < self._ema21
+        self._last_xover = "LONG" if crossed_long else "SHORT" if crossed_short else None
 
         # ADX regime gate — require a trending market; pass when ADX not yet warmed up
         if adx is not None and adx < self._adx_threshold:
@@ -234,9 +247,6 @@ class MomentumSignalState:
             return None
 
         slope = _trend_slope(list(self._slope_buf))
-
-        crossed_long  = self._prev_ema9 <= self._prev_ema21 and self._ema9 > self._ema21
-        crossed_short = self._prev_ema9 >= self._prev_ema21 and self._ema9 < self._ema21
 
         # M30 directional bias gate — block entries against 30-bar trend
         # Permissive while buffer has fewer than 30 bars (warm-up)
@@ -255,18 +265,28 @@ class MomentumSignalState:
         return None
 
     def check_exit(self) -> str | None:
-        """Return an exit reason if the current indicator state suggests closing.
+        """Signal-exit: EMA crosses back through, against the open position.
 
-        Momentum has no indicator-based mid-trade exit; exits are handled
-        entirely by evaluate_position() (trailing stop / take profit / hard stop).
+        SYSTEM_DESIGN §3.7 rule 4. Hard stop / trailing / TP take priority —
+        they are evaluated before this in the shared exit path.
         """
+        if self._position_dir == "BUY" and self._last_xover == "SHORT":
+            return "EMA cross-back"
+        if self._position_dir == "SELL" and self._last_xover == "LONG":
+            return "EMA cross-back"
         return None
 
-    def notify_entry(self) -> None:
-        pass
+    def notify_entry(self, direction: str) -> None:
+        """Record the open position's broker side ('BUY' or 'SELL')."""
+        self._position_dir = direction
 
     def notify_exit(self) -> None:
-        pass
+        self._position_dir = None
+
+    @property
+    def atr(self) -> float | None:
+        """Wilder ATR(14), or None while warming up. Source for ATR trailing."""
+        return self._adx_state.atr
 
 
 class MeanReversionSignalState:
@@ -282,12 +302,11 @@ class MeanReversionSignalState:
     (volatility too low relative to fixed spread cost to produce positive
     expectancy).  Disabled when spread_pts=0.0 (default).
 
-    check_exit() priority:
-      1. Hold cap  — fires after max_hold_bars bars in trade (default 5)
-      2. Z-score midline — fires when |z| ≤ zscore_exit_threshold (default 0.5)
-
-    notify_entry() / notify_exit() are called by the engine to synchronise the
-    hold-cap bar counter with actual position state.
+    check_exit(): z-score returned to midline — fires when
+      |z| ≤ zscore_exit_threshold (default 0.5). This is the deterministic
+      version of the catalog's "exit when z returns to 0" target exit
+      (SYSTEM_DESIGN §3.7 rule 4). The former hold-cap was removed 2026-05-15
+      (a backtest-only hack standing in for the missing time-exit).
     """
 
     _WINDOW = 20
@@ -298,25 +317,20 @@ class MeanReversionSignalState:
         adx_threshold: float = 25.0,
         zscore_exit_threshold: float = 0.5,
         spread_pts: float = 0.0,
-        max_hold_bars: int = 5,
     ) -> None:
         self._adx_threshold         = adx_threshold
         self._zscore_exit_threshold = zscore_exit_threshold
         self._spread_pts            = spread_pts
-        self._max_hold_bars         = max_hold_bars
         self._buf: deque[float] = deque(maxlen=self._WINDOW)
         self._adx_state = _ADXState(adx_period)
         self._last_z: float | None = None
-        self._bars_in_trade: int | None = None  # None = no open position
+        self._position_dir: str | None = None  # "BUY"/"SELL" while a trade is open
 
     def update(self, bar: OHLCBar) -> str | None:
         """Consume one bar; return 'LONG', 'SHORT', or None."""
         self._buf.append(bar.close)
         adx = self._adx_state.update(bar)
         atr = self._adx_state.atr
-
-        if self._bars_in_trade is not None:
-            self._bars_in_trade += 1
 
         if len(self._buf) < self._WINDOW:
             self._last_z = None
@@ -344,25 +358,26 @@ class MeanReversionSignalState:
         return None
 
     def check_exit(self) -> str | None:
-        """Return an exit reason if the position should close based on indicator state.
+        """Signal-exit: z-score returned to the midline (reversion complete).
 
-        Priority: hold cap before z-score midline.
-        Hard stop and take profit (evaluated by evaluate_position) take priority
-        over both — they are checked before check_exit() is called by the engine.
+        SYSTEM_DESIGN §3.7 rule 4. Hard stop / TP take priority — they are
+        evaluated before this in the shared exit path.
         """
-        if self._bars_in_trade is not None and self._bars_in_trade >= self._max_hold_bars:
-            return "Hold cap"
         if self._last_z is not None and abs(self._last_z) <= self._zscore_exit_threshold:
             return "Z-score midline"
         return None
 
-    def notify_entry(self) -> None:
-        """Called by the engine immediately after a trade is opened."""
-        self._bars_in_trade = 0
+    def notify_entry(self, direction: str) -> None:
+        """Record the open position's broker side ('BUY' or 'SELL')."""
+        self._position_dir = direction
 
     def notify_exit(self) -> None:
-        """Called by the engine immediately after a trade is closed."""
-        self._bars_in_trade = None
+        self._position_dir = None
+
+    @property
+    def atr(self) -> float | None:
+        """Wilder ATR(14), or None while warming up."""
+        return self._adx_state.atr
 
 
 class ORBSignalState:
@@ -448,13 +463,17 @@ class ORBSignalState:
         return round(self._or_high, 5), round(fill_price - or_width * rr_ratio, 5)
 
     def check_exit(self) -> str | None:
-        return None
+        return None  # one-shot breakout — no signal reversal to bail on
 
-    def notify_entry(self) -> None:
+    def notify_entry(self, direction: str) -> None:
         pass
 
     def notify_exit(self) -> None:
         pass
+
+    @property
+    def atr(self) -> float | None:
+        return None  # ORB has no ATR trailing (OR-width stop + fixed TP)
 
 
 # ---------------------------------------------------------------------------

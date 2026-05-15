@@ -300,13 +300,13 @@ These improvements address the three cost/edge issues identified in research.
 
 Trade-log persistence and gross-vs-net audit fields, added to support
 Phase A of `/AUDIT_PLAN.md`. Source of truth for the audit work is
-`/AUDIT_PLAN.md` and `/audit/A1_inventory.md`, **not** this file.
+`/AUDIT_PLAN.md`, **not** this file.
 
 - [x] `Trade` dataclass gains `entry_mid`, `exit_mid`, `spread_at_entry`, `resolution` — enables gross-vs-net cost decomposition. Engine populates the first three; `run.py` stamps `resolution` after engine returns.
 - [x] `run.py --output PATH` writes one Parquet file per run via `_write_trade_log`. `pyarrow>=16.0` added to runtime deps.
 - [x] Stale BACKTESTING.md §9.2 fixed — code does deduct spread; doc had said otherwise.
 - [x] Unit tests: `TestAuditFields` in `test_engine.py` (6 tests) and 3 parquet-writer tests in `test_run.py`. **302 passing.**
-- [x] First augmented run: `/audit/trades_M15.parquet` (2,756 trades).
+- [x] ~~First augmented run: `/audit/trades_M15.parquet` (2,756 trades).~~ **Superseded 2026-05-15:** the old engine had the intraday time-exit disabled (results misleading, deleted). Engine **rebuilt** to share one deterministic exit path with the live monitor; clean 3-yr re-baseline regenerated (17,335 trades; see `audit/RESULTS.md`).
 
 > **Forward work moves to `/AUDIT_PLAN.md`.** The audit owns timeframe,
 > universe, and strategy decisions from here; this TODO file is now
