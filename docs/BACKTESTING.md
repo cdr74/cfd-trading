@@ -206,25 +206,33 @@ Both signal functions take a **list of `OHLCBar` objects in chronological order*
 
 **Logic:**
 
+*(Redesigned 2026-05-15 — pending crossover + confirmation window. Runs on
+**M30** bars. Replaces the old fire-on-cross logic, whose gap filter was
+evaluated at the cross bar where the EMAs are ≈coincident and so rejected ~99%
+of crossovers — a filter-placement bug, not the algorithm.)*
+
 ```
-1. Compute EMA_9 and EMA_21 incrementally (O(1) Wilder-style)
-2. Compute ADX(14) incrementally
-3. Append bar to rolling 30-bar M30 buffer
-4. Suppress if ADX is valid AND ADX < adx_threshold (non-trending market)
-5. Suppress if EMA gap < min_ema_gap_pct (noise crossover)
-6. Compute linear trend slope over the last 22 bars
-7. LONG  if EMA_9 crossed above EMA_21 AND slope > 0
-       AND (M30 buffer not full OR M30 slope > 0)
-8. SHORT if EMA_9 crossed below EMA_21 AND slope < 0
-       AND (M30 buffer not full OR M30 slope < 0)
-9. None otherwise
+1. EMA_9, EMA_21, ADX(14) incrementally; append bar to 30-bar M30 buffer
+2. A raw EMA_9/EMA_21 crossover opens (or replaces) a PENDING signal in
+   that direction, age 0 — it does NOT fire on the cross bar
+3. On each subsequent bar the pending ages; if age > confirm_bars
+   (default 6) it expires (no trade)
+4. While pending and within the window, FIRE in the pending direction iff
+   ALL hold AT THIS bar:
+     - |EMA_9 − EMA_21| / EMA_21 ≥ min_ema_gap_pct
+     - ADX is warming up OR ADX ≥ adx_threshold
+     - 22-bar trend slope sign matches the pending direction
+     - M30 buffer not full OR M30 slope sign matches
+   A confirm-fail keeps the pending alive for later bars in the window;
+   only fire / expiry / a new crossover clears it
+5. None otherwise
 ```
 
 **Key detail — ADX regime gate:** Signal is suppressed when ADX(14) < 25 (default threshold). On M1 bars this detects whether the last 14 minutes are directionally trending. Passes unconditionally while ADX is warming up (first ~28 bars) to avoid missing early-session signals. Configurable via `signal_kwargs={"adx_threshold": value}` — set to `0.0` to disable entirely.
 
 **Key detail — slope filter:** A crossover that contradicts the overall trend slope is suppressed. Prevents late-entry signals at trend exhaustion.
 
-**Key detail — EMA gap filter:** Suppresses near-identical EMA crossovers below `_MIN_EMA_GAP_PCT` (default **0.05%** — research-validated floor; 4 pts at 8,000 = 4× a 1-pt spread). Tunable range: 0.01–0.10%. See `backtest/tune_momentum_gap.py`.
+**Key detail — EMA gap filter (now a *confirmation*, not a cross-bar gate):** the `min_ema_gap_pct` floor (default **0.05%**) is checked on the post-cross confirmation bars, not at the crossover itself (where the gap is structurally ≈0). This is the fix for the old filter-placement bug. ADX, slope and M30 are likewise evaluated at the confirm bar. `confirm_bars` (default 6) is a tunable `MomentumSignalState` constructor arg.
 
 **Key detail — slope window:** Slope computed over a fixed **22-bar window**, not unbounded history.
 
@@ -469,7 +477,7 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 | `--strategy NAME` | Run a single strategy (mutually exclusive with `--all-strategies`) |
 | `--all-strategies` | Run all strategies discovered in `config/strategies/` (excludes `_base` and `scan`) |
 | `--instruments LIST` | Comma-separated subset of watchlist epics (mutually exclusive with `--epic` and `--all-epics`). Used for audit runs on a trimmed universe. Errors if any name is not in `config/watchlist.yaml`. Example: `EURUSD,GBPUSD,US500,DE40,GOLD`. |
-| `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60`. **Default: each strategy's own `resolution:` from its YAML** (single source of truth, shared with the live monitor — momentum/mean_reversion `M1`, orb `M15`). Pass this only to override for an experiment (the audit re-baseline pins `M15` this way). Bars are aggregated from `--source-resolution` if the two differ. |
+| `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60`. **Default: each strategy's own `resolution:` from its YAML** (single source of truth, shared with the live monitor — **momentum `M30`**, mean_reversion `M1`, orb `M15`). Pass this only to override for an experiment. The audit re-baseline runs momentum at its YAML M30 and pins MR/ORB to `M15` via this flag. Bars are aggregated from `--source-resolution` if the two differ. |
 | `--source-resolution` | Resolution of bars read from the DB (default: `M1`). Set to match `--resolution` to skip aggregation when native bars are stored at the target resolution (e.g. native M15 from MT5). |
 | `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for Phase A audit slicing — see `AUDIT_PLAN.md`. |
 | `--momentum-relaxed` | Audit-mode momentum filter relaxation: ADX threshold 20 (from 25) and EMA gap floor 0.02% (from 0.05%). Used in Phase A2 to lift momentum trade counts to a statistically sliceable density. Strict defaults remain unchanged for live runs. |
@@ -492,9 +500,16 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 
 All tests use synthetic bar sequences — no real DB file or network access required.
 
-### 7.1 `tests/unit/test_signals.py` (32 tests)
+### 7.1 `tests/unit/test_signals.py`
 
-Tests for `backtest/signals.py`:
+> *(2026-05-15)* Suite total is now **329**. `signals.py` was promoted to
+> `strategy/signal_engine.py` (shared with the live monitor); momentum entry
+> tests were migrated to the pending-crossover **confirmation-window** semantics
+> and a `tests/unit/test_parity.py` (live↔backtest) was added. The row
+> descriptions below predate that redesign — the test files are the source of
+> truth for exact fixtures/assertions.
+
+Tests for `strategy/signal_engine.py`:
 
 | Test | What it verifies |
 |------|-----------------|
@@ -651,7 +666,7 @@ source .venv/bin/activate
 # Backtest tests only
 pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.py -v
 
-# Full unit suite (284 tests)
+# Full unit suite (329 tests)
 pytest tests/unit/ -v
 ```
 

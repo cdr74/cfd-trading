@@ -178,10 +178,17 @@ class MomentumSignalState:
         adx_period: int = 14,
         adx_threshold: float = 25.0,
         m30_gate: bool = True,
+        confirm_bars: int = 6,
     ) -> None:
         self._min_ema_gap_pct = min_ema_gap_pct
         self._adx_threshold   = adx_threshold
         self._m30_gate        = m30_gate
+        self._confirm_bars    = confirm_bars
+        # Pending crossover awaiting confirmation: {"dir": "LONG"|"SHORT",
+        # "age": int}. A crossover only opens this; it fires on a later bar
+        # (age 1..confirm_bars) once gap/ADX/slope/M30 confirm — the EMAs are
+        # ≈coincident *at* the cross, so confirmation must come after it.
+        self._pending: dict | None = None
         self._n: int = 0
         self._ema9:  float | None = None
         self._ema21: float | None = None
@@ -237,30 +244,46 @@ class MomentumSignalState:
         crossed_short = self._prev_ema9 >= self._prev_ema21 and self._ema9 < self._ema21
         self._last_xover = "LONG" if crossed_long else "SHORT" if crossed_short else None
 
-        # ADX regime gate — require a trending market; pass when ADX not yet warmed up
-        if adx is not None and adx < self._adx_threshold:
+        # --- Entry: pending crossover + confirmation window ---
+        # A fresh crossover opens (or replaces) a pending signal but does NOT
+        # fire on the cross bar — the EMAs are ≈coincident there, so the gap
+        # filter could never pass. It fires on one of the next `confirm_bars`
+        # bars, once gap / ADX / slope / M30 all confirm at that later bar.
+        if crossed_long or crossed_short:
+            self._pending = {"dir": "LONG" if crossed_long else "SHORT", "age": 0}
             return None
 
-        # Gap filter — suppress near-identical EMA crossovers
+        if self._pending is None:
+            return None
+
+        self._pending["age"] += 1
+        if self._pending["age"] > self._confirm_bars:
+            self._pending = None          # window elapsed unconfirmed
+            return None
+
+        # Confirmation gates — evaluated at THIS post-cross bar. A failure
+        # keeps the pending alive; it may still confirm on a later bar in
+        # the window. Only fire / expiry / a new crossover clears it.
+        if adx is not None and adx < self._adx_threshold:
+            return None
         gap_pct = abs(self._ema9 - self._ema21) / self._ema21
         if gap_pct < self._min_ema_gap_pct:
             return None
-
         slope = _trend_slope(list(self._slope_buf))
-
-        # M30 directional bias gate — block entries against 30-bar trend
-        # Permissive while buffer has fewer than 30 bars (warm-up)
+        pdir = self._pending["dir"]
         m30_bullish: bool | None = None
         if self._m30_gate and len(self._m30_buf) >= self._M30_WINDOW:
             m30_bullish = _trend_slope([b.close for b in self._m30_buf]) > 0
 
-        if crossed_long and slope > 0:
+        if pdir == "LONG" and slope > 0:
             if m30_bullish is not None and not m30_bullish:
                 return None
+            self._pending = None
             return "LONG"
-        if crossed_short and slope < 0:
+        if pdir == "SHORT" and slope < 0:
             if m30_bullish is not None and m30_bullish:
                 return None
+            self._pending = None
             return "SHORT"
         return None
 

@@ -1,6 +1,6 @@
 name: momentum
 description: Trend-following strategy targeting breakouts with trailing stop management
-resolution: M1        # catalog horizon (EMA9/21 on 1-min). Source of truth for live monitor + backtest.
+resolution: M30       # 2026-05-15: M30 (3-yr data, cleanest gap development; ITSM/RESEARCH basis). M15 is a viable future option. Source of truth for live monitor + backtest.
 
 entry:
   min_size: 0.1

@@ -56,11 +56,11 @@ def _bars(prices: list[float]) -> list[OHLCBar]:
 
 
 def _momentum_long_entry_bars(entry_open: float = 1.10) -> list[OHLCBar]:
-    """21 flat bars + 1 spike → signal fires; next bar is the entry bar."""
-    flat = [1.0] * 21
-    spike = [1.10]
-    entry = [entry_open]
-    return _bars(flat + spike) + [_bar((len(flat) + len(spike)) * 60, entry_open, entry_open)]
+    """21 flat + spike (crossover) + 1 confirm bar → signal fires; the next
+    bar is the entry bar. Momentum entry is a pending crossover that confirms
+    on a later bar, so a confirm bar must sit between the cross and entry."""
+    pre = _bars([1.0] * 21 + [1.10, 1.10])          # idx21 cross, idx22 confirm→signal
+    return pre + [_bar(len(pre) * 60, entry_open, entry_open)]   # idx23 entry bar
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ class TestEntry:
 
     def test_momentum_short_opens_trade(self, momentum_cfg):
         # 21 flat bars + spike down → SHORT signal
-        bars = _bars([1.0] * 21 + [0.90, 0.90])
+        bars = _bars([1.0] * 21 + [0.90, 0.90, 0.90])
         result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
         assert result.total_trades >= 1
         assert result.trades[0].direction == "SELL"
@@ -125,7 +125,7 @@ class TestExits:
 
     def test_hard_stop_closes_trade(self, momentum_cfg):
         # Entry at 1.10, stop ≈ 1.078; bar after entry crashes to 0.50
-        signal_bars = _bars([1.0] * 21 + [1.10])     # signal fires here
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])     # signal fires here
         entry_bar = _bar(22 * 60, 1.10)              # entry at 1.10 open
         crash_bar = _bar(23 * 60, 0.50)              # price below stop
         bars = signal_bars + [entry_bar, crash_bar]
@@ -149,7 +149,7 @@ class TestExits:
             }
         }
         # Entry at 1.10; TP = 1.10 + 1.10*0.02*1.5 = 1.133; 2.0 > 1.133 → CLOSE
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         tp_bar = _bar(23 * 60, 2.0)
         bars = signal_bars + [entry_bar, tp_bar]
@@ -163,7 +163,7 @@ class TestExits:
     def test_trailing_stop_ratchets_upward(self, momentum_cfg):
         # Enter BUY at 1.10. Price rises to 2.0 → ratchet should ADJUST stop upward.
         # Then price crashes → closed at the ratcheted stop level.
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         # min_distance_pct=0.5; candidate = 2.0 * 0.995 = 1.99 > initial stop 1.078 → ADJUST
         high_bar = _bar(23 * 60, 2.0)
@@ -181,7 +181,7 @@ class TestExits:
 
     def test_end_of_data_closes_open_trade(self, momentum_cfg):
         # Signal fires but no more bars to trigger a rule exit → closed at last bar
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         flat_bars = [_bar((23 + i) * 60, 1.10) for i in range(3)]
         bars = signal_bars + [entry_bar] + flat_bars
@@ -207,7 +207,7 @@ class TestMetrics:
 
     def test_win_rate_computed_correctly(self, momentum_cfg):
         # One winning trade (TP hit)
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         tp_bar = _bar(23 * 60, 2.0)
         bars = signal_bars + [entry_bar, tp_bar]
@@ -218,7 +218,7 @@ class TestMetrics:
         assert result.win_rate == 1.0
 
     def test_stop_out_rate_computed_correctly(self, momentum_cfg):
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         crash_bar = _bar(23 * 60, 0.50)
         bars = signal_bars + [entry_bar, crash_bar]
@@ -227,7 +227,7 @@ class TestMetrics:
         assert result.stop_out_rate == 1.0
 
     def test_profit_factor_with_winning_trade(self, momentum_cfg):
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         tp_bar = _bar(23 * 60, 2.0)
         bars = signal_bars + [entry_bar, tp_bar]
@@ -250,7 +250,7 @@ class TestMetrics:
 
     def test_net_pnl_pts_is_sum_of_trade_pnl(self, momentum_cfg):
         # One stop-out trade: entry 1.10, crash to 0.50 → pnl = 0.50 - 1.10 = -0.60
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         crash_bar = _bar(23 * 60, 0.50)
         bars = signal_bars + [entry_bar, crash_bar]
@@ -264,7 +264,7 @@ class TestMetrics:
     def test_avg_r_computed_correctly(self, momentum_cfg):
         # entry=1.10, stop_pct=0.02, net_pnl=-0.60 (crash to 0.50)
         # R = 1.10 * 0.02 = 0.022; avg_r = -0.60 / (1 * 0.022) ≈ -27.27
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         crash_bar = _bar(23 * 60, 0.50)
         bars = signal_bars + [entry_bar, crash_bar]
@@ -297,7 +297,7 @@ class TestMetrics:
         # BUY at next_bar.open=1.10 with spread_pts=0.10:
         #   entry fill = 1.10 + 0.05 = 1.15
         #   exit fill  = close - 0.05
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         flat_bar = _bar(23 * 60, 1.10)
         bars = signal_bars + [entry_bar, flat_bar]
@@ -312,7 +312,7 @@ class TestMetrics:
         # SELL at next_bar.open=0.90 with spread_pts=0.10:
         #   entry fill = 0.90 - 0.05 = 0.85
         #   exit fill  = close + 0.05
-        bars = _bars([1.0] * 21 + [0.90, 0.90])
+        bars = _bars([1.0] * 21 + [0.90, 0.90, 0.90])
 
         result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
                               spread_pts=0.10)
@@ -337,7 +337,7 @@ class TestDirectionalSplit:
 
     def test_all_long_trades_no_short(self, momentum_cfg):
         # Signal sequence produces only LONG entries; short fields should be zero
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         exit_bar    = _bar(23 * 60, 2.00)   # take profit
         bars = signal_bars + [entry_bar, exit_bar]
@@ -349,7 +349,7 @@ class TestDirectionalSplit:
         assert result.short_profit_factor == 0.0
 
     def test_directional_split_sums_to_total(self, momentum_cfg):
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         crash_bar   = _bar(23 * 60, 0.50)
         bars = signal_bars + [entry_bar, crash_bar]
@@ -367,7 +367,7 @@ class TestDirectionalSplit:
                 "time_exit": {"enabled": False},
             }
         }
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         tp_bar      = _bar(23 * 60, 2.00)
         bars = signal_bars + [entry_bar, tp_bar]
@@ -399,7 +399,7 @@ class TestATRTrailing:
     def test_atr_trailing_ratchets_above_initial_stop(self, atr_cfg):
         # 21 flat + 1 spike → LONG at 1.10; price rises for 15 bars then gently falls.
         # ATR trailing ratchets the stop well above the initial 2% hard stop (1.078).
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         rise_bars   = _bars([1.10 + i * 0.01 for i in range(1, 16)])  # 1.11..1.25
         fall_bars   = _bars([1.25 - i * 0.002 for i in range(1, 40)])  # gentle fall
@@ -409,8 +409,11 @@ class TestATRTrailing:
         bars = signal_bars + [entry_bar] + rise_bars + fall_bars
 
         result = run_backtest("EURUSD", "momentum", bars, atr_cfg, RISK_CFG)
-        assert result.total_trades == 1
+        # Under the confirm-window entry, the gentle fall can confirm a second
+        # crossover; we only care about the first (LONG) trade here.
+        assert result.total_trades >= 1
         trade = result.trades[0]
+        assert trade.direction == "BUY"
         initial_hard_stop = trade.entry_price * (1 - 0.02)   # 2% below entry
         # ATR trailing should ratchet stop above the initial 2% hard stop
         assert trade.exit_price > initial_hard_stop
@@ -418,7 +421,7 @@ class TestATRTrailing:
     def test_atr_trailing_does_not_fire_before_price_moves(self, atr_cfg):
         # LONG entry, then immediate crash — ATR trailing ratchet should not have moved
         # stop above OR low since price never rose, so trade closes at entry-level stop.
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         crash_bar   = _bar(23 * 60, 0.50)
         bars = signal_bars + [entry_bar, crash_bar]
@@ -430,7 +433,7 @@ class TestATRTrailing:
 
     def test_no_hard_tp_with_large_rr_ratio(self, atr_cfg):
         # With min_rr_ratio=99, a 2× move should not trigger take-profit
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar   = _bar(22 * 60, 1.10)
         tp_bar      = _bar(23 * 60, 2.20)   # 2× entry — TP at 99× stop won't be reached
         eod_bar     = _bar(24 * 60, 2.20)
@@ -450,7 +453,7 @@ class TestAuditFields:
 
     def test_entry_mid_is_next_bar_open_not_fill(self, momentum_cfg):
         # Verify entry_mid is the un-spread-adjusted price.
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         flat_bar = _bar(23 * 60, 1.10)
         bars = signal_bars + [entry_bar, flat_bar]
@@ -464,7 +467,7 @@ class TestAuditFields:
         assert trade.entry_price - trade.entry_mid == pytest.approx(0.05, rel=1e-6)
 
     def test_exit_mid_is_bar_close_not_fill(self, momentum_cfg):
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         flat_bar = _bar(23 * 60, 1.10)
         bars = signal_bars + [entry_bar, flat_bar]
@@ -478,13 +481,13 @@ class TestAuditFields:
         assert trade.exit_price == pytest.approx(trade.exit_mid - 0.05, rel=1e-6)
 
     def test_spread_at_entry_is_recorded(self, momentum_cfg):
-        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG,
                               spread_pts=0.10)
         assert result.trades[0].spread_at_entry == pytest.approx(0.10, rel=1e-6)
 
     def test_zero_spread_records_zero(self, momentum_cfg):
-        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)  # default spread_pts=0
         trade = result.trades[0]
         assert trade.spread_at_entry == 0.0
@@ -494,14 +497,14 @@ class TestAuditFields:
 
     def test_resolution_default_is_none_when_engine_called_directly(self, momentum_cfg):
         # The engine never sets resolution — run.py stamps it after the fact.
-        bars = _bars([1.0] * 21 + [1.10, 1.10])
+        bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         result = run_backtest("EURUSD", "momentum", bars, momentum_cfg, RISK_CFG)
         assert result.trades[0].resolution is None
 
     def test_gross_net_decomposition_recoverable(self, momentum_cfg):
         # With recorded mids and spread, gross P&L is (exit_mid - entry_mid)
         # for BUY trades, and the cost is the full spread paid.
-        signal_bars = _bars([1.0] * 21 + [1.10])
+        signal_bars = _bars([1.0] * 21 + [1.10, 1.10, 1.10])
         entry_bar = _bar(22 * 60, 1.10)
         up_bar = _bar(23 * 60, 1.12)
         eod_bar = _bar(24 * 60, 1.12)
@@ -567,7 +570,7 @@ class TestSessionModel:
         # Position opens, one in-trade bar, then the series jumps to the NEXT
         # UTC day with no bar in the close window → forced flat at prior bar.
         start = _uts(2026, 5, 15, 9, 0)
-        bars = self._mom_bars([1.0] * 21 + [1.10, 1.10], start)   # last in-trade bar ~14:15
+        bars = self._mom_bars([1.0] * 21 + [1.10, 1.10, 1.10, 1.10], start)  # cross,confirm,entry,in-trade — all day 1
         bars.append(OHLCBar(epic="EURUSD", resolution="M15",
                             ts=_uts(2026, 5, 16, 9, 0), open=1.10, high=1.10,
                             low=1.10, close=1.10, volume=100))

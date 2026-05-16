@@ -112,7 +112,7 @@ At each entry cycle, flip a fair coin for direction (LONG/SHORT). Size at strate
 
 **Type:** TREND-FOLLOWING  
 **Status:** YAML + prompt module implemented (`momentum.yaml`, `momentum.md`)  
-**Horizon:** 1-min bars (60 available from Capital.com)  
+**Horizon:** deterministic signal runs on **M30** bars (2026-05-15); Claude's live `analyze_instrument` context still uses 60 × 1-min bars (see §5.2)  
 **Assets:** EURUSD, GBPUSD, US500, DE40, GOLD  
 **Signal hypothesis:** Recent returns predict near-future returns when drift dominates noise  
 **Noise regime:** Degrades sharply in range-bound / low-ATR regimes
@@ -149,11 +149,13 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 
 **Implementation note:** EMA_9, EMA_21 are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). `signal_t` (EMA_9 − EMA_21) and trend slope are also returned. The normalised z_t (signal_t / rolling_std) is not yet computed — Claude reasons qualitatively over the gap instead.
 
-**Backtest signal note:** The deterministic backtest approximation (`backtest/signals.py`) adds three additional filters to the EMA crossover:
+**Backtest signal note** *(redesigned 2026-05-15; shared `strategy/signal_engine.py`, used by both the backtest and the live monitor):*
 
-- **EMA gap filter** — suppressed if `|EMA_9 − EMA_21| / EMA_21 < 0.05%`. Guards against noise crossovers (0.05% = 4 pts at 8,000 = 4× a 1-pt spread; research-validated minimum). Configurable via `_MIN_EMA_GAP_PCT`.
-- **ADX regime gate** — suppressed when `ADX(14) < 25` (non-trending market). Disable via `signal_kwargs={"adx_threshold": 0.0}`.
-- **M30 directional bias gate** — each M1 bar is appended to a rolling 30-bar buffer. When the buffer is full, OLS slope of the 30 closes defines the 30-min trend. LONG entries are blocked when the M30 trend is bearish; SHORT entries are blocked when M30 is bullish. Permissive while warming up (<30 bars). Disable via `signal_kwargs={"m30_gate": False}`.
+Momentum runs on **M30** bars (`momentum.yaml resolution: M30` — single source of truth; M15 is a documented future option). Entry is a **pending crossover with a confirmation window**, not a fire-on-cross:
+
+- An EMA_9/EMA_21 crossover does **not** fire on the cross bar (the EMAs are ≈coincident there, so a gap test could never pass — the old "gap filter at the cross bar" rejected ~99% of crossovers; that was a filter-placement bug, not the algorithm). Instead the crossover opens a **pending** signal in that direction.
+- On each of the next `confirm_bars` bars (tunable constructor arg, default **6**) the pending **fires** once *all* confirm at that later bar: `|EMA_9 − EMA_21|/EMA_21 ≥ min_ema_gap_pct` (default 0.05%); `ADX(14) ≥ adx_threshold` (default 25; disable via `signal_kwargs={"adx_threshold": 0.0}`); trend slope sign matches; M30 directional bias matches (rolling 30-bar OLS slope; disable via `m30_gate=False`; permissive while <30 bars).
+- If no bar within the window confirms, the pending expires (no trade). A new opposite crossover replaces it. Net effect on the 3-yr re-baseline: momentum fires ~1,770 trades vs ~44 under the old fire-on-cross gap test.
 
 ### 5.3 Stop Loss & Take Profit Rules
 

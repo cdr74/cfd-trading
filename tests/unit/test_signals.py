@@ -42,13 +42,13 @@ class TestMomentumSignal:
         assert result is None  # flat: no crossover
 
     def test_long_signal_on_upward_crossover(self):
-        # 21 bars flat at 1.0, then spike to 1.10 → EMA_9 crosses above EMA_21
-        bars = _flat_then_spike(21, 1.0, 1.10)
+        # 21 flat + spike → crossover; +1 confirm bar (gap/slope hold) → LONG
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
         assert momentum_signal(bars) == "LONG"
 
     def test_short_signal_on_downward_crossover(self):
-        # 21 bars flat at 1.0, then drop to 0.90 → EMA_9 crosses below EMA_21
-        bars = _flat_then_spike(21, 1.0, 0.90)
+        # 21 flat + drop → crossover; +1 confirm bar → SHORT
+        bars = _bars([1.0] * 21 + [0.90, 0.90])
         assert momentum_signal(bars) == "SHORT"
 
     def test_no_signal_when_ema9_already_above_ema21(self):
@@ -75,12 +75,12 @@ class TestMomentumSignal:
         assert momentum_signal(bars) is None
 
     def test_gap_filter_allows_large_crossover(self):
-        # Spike of 10% — EMA gap well above 0.15% minimum
-        bars = _flat_then_spike(21, 1.0, 1.10)
+        # Spike of 10% — gap well above the minimum, confirms within the window
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
         assert momentum_signal(bars) == "LONG"
 
     def test_returns_string_not_bool(self):
-        bars = _flat_then_spike(21, 1.0, 1.10)
+        bars = _bars([1.0] * 21 + [1.10, 1.10])
         result = momentum_signal(bars)
         assert isinstance(result, str)
 
@@ -157,7 +157,7 @@ class TestADXGate:
     def test_momentum_fires_when_adx_gate_disabled(self):
         # Same flat+spike sequence but with gate off (threshold=0) → signal fires
         state = MomentumSignalState(adx_threshold=0.0)
-        bars = _flat_then_spike(21, 1.0, 1.10)
+        bars = _bars([1.0] * 21 + [1.10, 1.10])   # cross + 1 confirm bar
         result = None
         for bar in bars:
             result = state.update(bar)
@@ -355,18 +355,19 @@ class TestCheckExit:
 
 class TestMomentumSignalState:
 
-    def test_fires_on_correct_bar_mid_sequence(self):
-        # Signal should fire at bar 22 (the crossover bar), not just at end of sequence
+    def test_fires_on_confirm_bar_not_cross_bar(self):
+        # Crossover opens a pending; the signal fires on the FIRST confirm bar
+        # (idx 22), never on the cross bar (idx 21), and not again afterwards.
         flat = _bars([1.0] * 21)
-        spike = _bars([1.10])
-        hold = _bars([1.10] * 5)
+        spike = _bars([1.10])          # idx 21 — crossover
+        hold = _bars([1.10] * 5)       # idx 22+ — confirm then steady
         state = MomentumSignalState()
         signals = []
         for bar in flat + spike + hold:
             signals.append(state.update(bar))
-        # Signal should fire exactly at bar 22 (index 21), not on hold bars
-        assert signals[21] == "LONG"
-        assert all(s is None for s in signals[22:])
+        assert signals[21] is None     # cross bar — pending opened, no fire
+        assert signals[22] == "LONG"   # first confirm bar fires
+        assert all(s is None for s in signals[23:])
 
     def test_ema_stays_current_during_position(self):
         # After 21 flat bars + spike, the state should still work correctly
@@ -426,7 +427,7 @@ class TestM30Gate:
     def test_gate_passes_long_when_m30_bullish(self):
         # [1.0]*29 + [1.30]: M30 slope positive (bullish) → LONG passes
         state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
-        for bar in _bars([1.0] * 29 + [1.30]):
+        for bar in _bars([1.0] * 29 + [1.30, 1.30]):   # cross + confirm bar
             result = state.update(bar)
         assert result == "LONG"
 
@@ -440,7 +441,7 @@ class TestM30Gate:
     def test_gate_disabled_when_m30_gate_false(self):
         # Same bearish-M30 sequence but gate off → LONG fires
         state = MomentumSignalState(adx_threshold=0.0, m30_gate=False)
-        for bar in _bars([1.1] * 10 + [1.0] * 20 + [1.30]):
+        for bar in _bars([1.1] * 10 + [1.0] * 20 + [1.30, 1.30]):  # cross + confirm
             result = state.update(bar)
         assert result == "LONG"
 
@@ -455,7 +456,7 @@ class TestM30Gate:
     def test_gate_permissive_during_warmup(self):
         # Only 22 bars total — M30 buffer not full (<30) → gate permissive → LONG fires
         state = MomentumSignalState(adx_threshold=0.0, m30_gate=True)
-        for bar in _flat_then_spike(21, 1.0, 1.10):
+        for bar in _bars([1.0] * 21 + [1.10, 1.10]):   # cross + confirm bar
             result = state.update(bar)
         assert result == "LONG"
 
