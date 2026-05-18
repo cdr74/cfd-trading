@@ -5,6 +5,8 @@ For architecture and design decisions see `docs/SYSTEM_DESIGN.md`. For strategy 
 
 > **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
 
+> ⚠️ **No validated strategy (2026-05-18).** This guide describes the working *mechanics*. The Phase A audit closed on the kill-criterion — no strategy has a deployable edge (`mean_reversion` dropped; `momentum`/`ORB` unvalidated). Use for development/backtesting only; **do not trade live**. See [`docs/STRATEGY_AUDIT.md`](STRATEGY_AUDIT.md).
+
 ---
 
 ## Contents

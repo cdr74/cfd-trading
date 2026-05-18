@@ -2,6 +2,8 @@
 
 AI-driven intraday CFD trading using Claude Code and Capital.com. Claude handles the full entry flow — scan markets, analyse instruments, propose and execute trades. A rule-based monitor manages open positions autonomously between entry cycles.
 
+> ⚠️ **Decision point (2026-05-18): no strategy has a validated edge.** The Phase A strategy audit closed on the kill-criterion — `mean_reversion` dropped (non-viable on retail CFD), `momentum` & `ORB` unvalidated (no edge survived Deflated-Sharpe / out-of-sample). The *infrastructure* is complete and works; what is missing is a deployable strategy. **Do not trade this live.** Authoritative record + the next-phase strategy debate: [`docs/STRATEGY_AUDIT.md`](docs/STRATEGY_AUDIT.md).
+
 **Repos:** `github.com/cdr74/cfd-trading` (this) · `github.com/cdr74/capital-mcp-server` · `github.com/cdr74/capital-com-client`  
 **Deployment:** WSL2 on Windows 11 (local) — portable to AWS
 
@@ -30,6 +32,7 @@ MCP endpoints: `https://localhost:8089/mcp` (cfd-trading) · `https://localhost:
 | Document | Contents |
 |----------|---------|
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | Setup, starting the system, running a session step-by-step, backtests, troubleshooting |
+| [`docs/STRATEGY_AUDIT.md`](docs/STRATEGY_AUDIT.md) | **Authoritative.** Strategy audit record + kill-criterion conclusion (Part 1) and the next-phase strategy debate / carried-forward guardrails / D1 cost anchor (Part 2) |
 | [`docs/SYSTEM_DESIGN.md`](docs/SYSTEM_DESIGN.md) | Architecture, design decisions, MCP tools, config schemas, SQLite schema, implementation status |
 | [`docs/CFD_STRATEGY_CATALOG.md`](docs/CFD_STRATEGY_CATALOG.md) | Algorithm design and mathematical definitions for all strategies (S1 momentum, S2 mean reversion, S3 breakout deferred) |
 | [`docs/BACKTESTING.md`](docs/BACKTESTING.md) | Backtesting framework: data layer, entry signals, engine, test suite *(rebuilt 2026-05-15 — engine shares one deterministic exit path with the live monitor; pre-2026-05-15 results were invalidated and superseded by a clean re-baseline)* |
@@ -42,4 +45,6 @@ MCP endpoints: `https://localhost:8089/mcp` (cfd-trading) · `https://localhost:
 
 ## Status
 
-All phases complete. 329 unit tests passing. Both MCP servers running as Podman containers. End-to-end smoke tests (SM-01–SM-11) passed. Backtesting framework operational — `docs/BACKTESTING.md` for how to run.
+**Infrastructure: complete and tested** — 329 unit tests passing, both MCP servers run as Podman containers, end-to-end smoke tests (SM-01–SM-11) passed, backtesting framework rebuilt and operational (`docs/BACKTESTING.md`).
+
+**Strategy: none deployable.** The Phase A audit closed 2026-05-18 on the kill-criterion — no validated edge in any strategy (`mean_reversion` dropped; `momentum` & `ORB` unvalidated). The project is at a strategic decision point; the next phase is the strategy debate in [`docs/STRATEGY_AUDIT.md`](docs/STRATEGY_AUDIT.md) Part 2. No new strategy is built before that concludes.
