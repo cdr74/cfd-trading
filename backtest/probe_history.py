@@ -10,8 +10,8 @@ Purpose:
     the broker's history cap at ~14 weeks. H1 and M15 typically expose
     longer history because brokers retain coarser resolutions longer.
 
-    Output decides whether AUDIT_PLAN.md Phase A6 (conditional backtest
-    window extension) fires.
+    Output informed Phase A6 of the (now closed) strategy audit — see
+    cfd-trading/docs/STRATEGY_AUDIT.md.
 
 Usage:
     python probe_history.py
@@ -122,7 +122,7 @@ def main() -> None:
         print(f"Wrote {args.csv}")
 
     print("\nDone.")
-    print("Feed the output into audit/A1_inventory.md §4 and decide A6 go/no-go:")
+    print("(Historical) strategy audit closed — see docs/STRATEGY_AUDIT.md. A6 heuristic:")
     print("  - A6 fires if H1 history >= 2x M1 history, OR M15 history >= 6 months")
     print("  - A6 skipped if history is shallow at all resolutions")
 

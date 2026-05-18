@@ -3,6 +3,8 @@
 Technical reference for architecture, design decisions, configuration, and implementation status.  
 For operational instructions see `docs/USER_GUIDE.md`. For algorithm definitions see `docs/CFD_STRATEGY_CATALOG.md`.
 
+> **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
+
 ---
 
 ## Contents
@@ -261,12 +263,14 @@ deterministically re-seeded on restart.
 **3c implementation resolutions (decided & implemented 2026-05-15):**
 
 - **O1 — bar resolution is a strategy property.** Each strategy YAML carries
-  `resolution:` (momentum `M1`, mean_reversion `M1`, orb `M15` — the catalog-intended
-  horizons). The live monitor and the backtest runner both read it as the single
-  source of truth; the backtest CLI `--resolution` remains an explicit experiment
-  override. (Open, owner = operator: momentum's M1 horizon vs. ~3.5-month M1 data
-  coverage — the strict-default 44-trade/3-yr result is most likely this
-  resolution/parameter mismatch, not the algorithm. Tracked for a dedicated review.)
+  `resolution:` (momentum **`M30`**, mean_reversion `M1`, orb `M15` — the
+  catalog-intended horizons). The live monitor and the backtest runner both read it
+  as the single source of truth; the backtest CLI `--resolution` remains an explicit
+  experiment override. (Momentum was moved to M30 on 2026-05-15: the ITSM effect is a
+  ~30-min phenomenon, M1 data is only ~3.5 months deep, and the old M1 strict-default
+  yielded ~44 trades/3-yr — a resolution/parameter mismatch, not an algorithm fault.
+  M30 over the 3-yr re-baseline fires ~1,770 trades. See `RESEARCH.md` and
+  `CFD_STRATEGY_CATALOG.md` §5.2.)
 - **O2 — `entry_atr` is captured during the O3 warm-up backfill** (collapsed into
   O3; *no* trades-DB schema change, *no* execution-tool change). The monitor's
   first-sighting/restart backfill replays a window that starts *before* the
@@ -304,7 +308,10 @@ The planned fix is a `BrokerClient` Protocol in `broker/protocol.py` with normal
 > and momentum/ORB held multi-day/multi-week positions). Engine + monitor now share
 > this exit path (Phases 3–5 done; live==backtest parity test in
 > `tests/unit/test_parity.py`). All prior backtest results were invalidated/deleted
-> and a clean re-baseline regenerated (`audit/RESULTS.md`).
+> and a clean re-baseline regenerated. The subsequent strategy audit
+> (`docs/STRATEGY_AUDIT.md`) closed 2026-05-18 on the Phase A kill-criterion —
+> MR dropped (non-viable); momentum & ORB unvalidated (no edge survived
+> Deflated-Sharpe). System is pre-pivot; no strategy is deploy-ready.
 
 After the 2026-05-15 redesign the **entire exit path is deterministic and shared** —
 hard stop, trailing, TP, **signal-exit (§3.7 rule 4)**, and time-exit all run through
@@ -355,8 +362,9 @@ cfd-trading/
 │   └── strategies/
 │       ├── _base.md                 # proposal schema + hard rules for Claude Code context
 │       ├── scan.md                  # market scan prompt
-│       ├── momentum.yaml / .md      # trend-following strategy
-│       └── mean_reversion.yaml / .md  # range-bound strategy
+│       ├── momentum.yaml / .md      # S1 — trend-following (resolution: M30)
+│       ├── mean_reversion.yaml / .md  # S2 — range-bound (resolution: M1)
+│       └── orb.yaml / .md           # S5 — Opening Range Breakout (resolution: M15)
 ├── data/                            # gitignored
 │   ├── trading.db
 │   └── audit.jsonl
@@ -364,13 +372,18 @@ cfd-trading/
 │   ├── SYSTEM_DESIGN.md             # this file
 │   ├── USER_GUIDE.md                # operational guide
 │   ├── CFD_STRATEGY_CATALOG.md      # algorithm design and math
-│   └── BACKTESTING.md               # backtesting framework, tests, results
+│   ├── BACKTESTING.md               # backtesting framework, tests, results
+│   ├── RESEARCH.md                  # empirical parameter research (M30/ORB basis)
+│   └── GLOSSARY.md                  # abbreviations & terms (single source of truth)
 ├── src/cfd_trading/
 │   ├── server.py                    # FastMCP entry point
 │   ├── backtest/
-│   │   ├── engine.py                # walks bars, calls signal + monitor rule engine
+│   │   ├── engine.py                # walks bars, calls signal_engine + monitor rule engine
 │   │   ├── run.py                   # CLI entry point
-│   │   └── signals.py               # deterministic entry signal functions
+│   │   ├── aggregate.py             # M1 → M15/M30/… in-process aggregation
+│   │   ├── sessions.py              # per-instrument UTC session-open table
+│   │   ├── spreads.py               # per-instrument typical spread (pts)
+│   │   └── tune_momentum_gap.py     # EMA-gap sweep utility
 │   ├── broker/
 │   │   └── capital_client.py        # re-exports CapitalClient; BACKTEST_MODE guard
 │   ├── monitor/
@@ -381,14 +394,20 @@ cfd-trading/
 │   │   ├── db.py                    # SQLite init + schema
 │   │   └── repository.py            # CRUD + get_bars() for backtesting
 │   ├── strategy/
-│   │   └── loader.py                # discovers + validates strategy YAML+MD pairs
+│   │   ├── loader.py                # discovers + validates strategy YAML+MD pairs
+│   │   └── signal_engine.py         # SHARED streaming signals + signal-exit
+│   │                                #   (imported by monitor AND backtest — no drift)
 │   └── tools/
 │       ├── session_tools.py         # start_session, end_session, get_session_status
 │       ├── scan_tools.py            # scan_markets, analyze_instrument
 │       └── trade_tools.py           # validate_proposal, execute_trade
 ├── tests/
-│   ├── unit/                        # 215 tests — preflight, monitor, tools, backtest
+│   ├── unit/                        # 329 tests — preflight, monitor, tools, backtest,
+│   │                                #   signal_engine, parity (live↔backtest)
 │   └── integration/                 # against Capital.com demo API
+├── backtest/                        # Windows-side MT5 scripts (not in src/ — run on Windows Python)
+│   ├── fetch_ohlc.py                # MT5 bar fetch → ohlc_bars
+│   └── probe_history.py             # MT5 native-history depth probe
 ├── integration-test/
 │   ├── mcp-start.sh / mcp-stop.sh
 │   ├── mcp-status.sh / mcp-fix-config.sh
@@ -441,6 +460,11 @@ crypto:      [BTCUSD, ETHUSD]
 
 ```yaml
 name: momentum
+description: Trend-following strategy targeting breakouts with trailing stop management
+resolution: M30                  # bar resolution — single source of truth for the
+                                 # live monitor AND the backtest (momentum M30,
+                                 # mean_reversion M1, orb M15). --resolution overrides
+                                 # only for backtest experiments.
 entry:
   min_size: 0.1
   max_size: 5.0
@@ -452,8 +476,10 @@ risk:
     max_pct: 5.0
   trailing_stop:
     enabled: true
-    min_distance_pct: 0.5
-    max_distance_pct: 3.0
+    atr_multiplier: 1.5          # distance = ATR14@entry × 1.5, fixed for the
+                                 # trade, ratchet-only (resolved 2026-05-15 —
+                                 # superseded the old min/max_distance_pct fields).
+                                 # MR & ORB set trailing_stop.enabled: false instead.
     update_interval_min: 1
   take_profit:
     dynamic: true

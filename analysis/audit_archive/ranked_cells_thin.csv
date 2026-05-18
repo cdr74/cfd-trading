@@ -1,0 +1,14 @@
+strategy,epic,n,win_pct,pf,expectancy_per_trade,expectancy_ratio,avg_spread,scope,session
+orb,UK100,6.0000,0.6667,2.8730,15.7333,15.7333,1.0000,per-session,Overlap
+orb,DE40,10.0000,0.6000,1.6764,15.0100,15.0100,1.0000,per-session,Overlap
+momentum,UK100,19.0000,0.6316,2.6480,9.1421,9.1421,1.0000,per-session,NY
+momentum,UK100,19.0000,0.5789,1.6971,8.9737,8.9737,1.0000,per-session,Overlap
+orb,EURUSD,2.0000,0.5000,3.6000,0.0004,3.9000,0.0001,per-session,Overlap
+momentum,EURGBP,22.0000,0.5909,2.1488,0.0002,2.0000,0.0001,per-session,NY
+momentum,GBPUSD,22.0000,0.5000,1.2141,0.0002,1.7273,0.0001,per-session,Asia
+orb,DE40,1.0000,1.0000,inf,1.0000,1.0000,1.0000,per-session,NY
+momentum,EURUSD,26.0000,0.3077,1.0892,0.0001,0.6692,0.0001,per-session,Asia
+orb,EURGBP,1.0000,0.0000,0.0000,-0.0001,-0.9000,0.0001,per-session,NY
+momentum,EURGBP,10.0000,0.0000,0.0000,-0.0008,-8.0100,0.0001,per-session,Asia
+orb,USDJPY,1.0000,0.0000,0.0000,-0.0910,-9.1000,0.0100,per-session,NY
+momentum,UK100,12.0000,0.1667,0.1023,-15.2917,-15.2917,1.0000,per-session,Asia

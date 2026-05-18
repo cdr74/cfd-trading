@@ -6,6 +6,8 @@ strategies at **1-minute bar resolution**, with CFD-specific adjustments.
 **Date compiled:** 2026-05-12  
 **Timeframe:** 1-minute bars (intraday CFD trading)
 
+> **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
+
 ---
 
 ## Sources
@@ -308,9 +310,15 @@ regime:
 
 ### ORB Structural Findings
 
-**Hypothesis (test against the clean re-baseline `audit/RESULTS.md`):** Opening Range Breakout *should* have structural edge on European equity indices and USDJPY, and little on FX pairs, crypto, or commodities — for the mechanism reasons below.
+> **⚠️ Audit verdict (2026-05-18, `docs/STRATEGY_AUDIT.md`):** ORB's apparent
+> index edge did **not** survive Deflated-Sharpe / out-of-sample testing — the
+> headline was one regime-fragile cell (DE40-London). The structural
+> *mechanism* below is retained as a **hypothesis for the next-phase debate**;
+> it is **not** a validated live edge.
 
-> **⚠️ Empirical PF/Win% table removed 2026-05-15** — produced by the old (time-exit-disabled) engine. The structural reasoning below is retained; current numbers live in the clean re-baseline (`audit/RESULTS.md`, `audit/ranked_cells.csv`) from the rebuilt engine.
+**Hypothesis:** Opening Range Breakout *should* have structural edge on European equity indices and USDJPY, and little on FX pairs, crypto, or commodities — for the mechanism reasons below.
+
+> **⚠️ Empirical PF/Win% table removed 2026-05-15** — produced by the old (time-exit-disabled) engine. The structural reasoning below is retained; current numbers + the DSR verdict live in `docs/STRATEGY_AUDIT.md` (dataset/CSVs archived at `analysis/audit_archive/`).
 
 **Why equity indices respond to ORB:**  
 The Xetra and LSE auction process creates genuine order flow imbalance at 08:00 UTC — accumulated overnight orders clear at the open, driving directional momentum that tends to persist for the first session hour. This is the mechanism Zarattini & Aziz documented on US equity index futures (ES, NQ). DE40 and UK100 exhibit the same structural property.
@@ -332,7 +340,7 @@ Stop at OR low (LONG) / OR high (SHORT) is correct — it is the natural invalid
 
 The OR width itself is a session-calibrated ATR proxy. Setting TP at 2×OR-width is therefore already an ATR-relative target, making the additional per-bar ATR computation redundant. The M15 ATR(14) is more variable and at 1.5× typically tighter than 2×OR-width, causing premature exits.
 
-> **⚠️ Empirical PF table removed 2026-05-15** (old time-exit-disabled engine). The qualitative finding — 1.5×ATR trailing tends to exit ORB winners early because OR-width is already a session-calibrated ATR proxy — drove the decision to **disable ORB trailing** in the rebuild (`orb.yaml trailing_stop.enabled: false`; catalog §13). Current ORB numbers: `audit/RESULTS.md`.
+> **⚠️ Empirical PF table removed 2026-05-15** (old time-exit-disabled engine). The qualitative finding — 1.5×ATR trailing tends to exit ORB winners early because OR-width is already a session-calibrated ATR proxy — drove the decision to **disable ORB trailing** in the rebuild (`orb.yaml trailing_stop.enabled: false`; catalog §13). Current ORB numbers + verdict: `docs/STRATEGY_AUDIT.md`.
 
 **Recommendation:** Retain the fixed 2×OR-width TP as the primary target. If ATR-trailing is revisited, use a larger multiplier (≥ 3.0×) or combine: ATR trail as a floor, OR-width TP as a cap.
 

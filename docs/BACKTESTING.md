@@ -2,6 +2,8 @@
 
 A complete reference for running, understanding, and extending the backtesting framework in this repo.
 
+> **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
+
 ---
 
 > **⚠️ ALL RESULTS INVALIDATED (2026-05-15).** Every backtest result previously in
@@ -60,11 +62,11 @@ WSL2 (cfd-trading package)
     ├── backtest/aggregate.py  aggregate_bars()  ← M1→M15/M30/… in-process
     ├── strategy/loader.py  load_strategy()
     │     └── reads config/strategies/<name>.yaml + .md
-    ├── backtest/signals.py  momentum_signal() / mean_reversion_signal()
-    │     └── pure functions — no I/O
+    ├── strategy/signal_engine.py  MomentumSignalState / MeanReversionSignalState / ORBSignalState
+    │     └── SHARED with the live monitor — streaming O(1)/bar, no I/O
     ├── backtest/engine.py  run_backtest()
-    │     ├── calls signal function per bar
-    │     └── calls monitor/monitor.py evaluate_position() per bar
+    │     ├── update()s the signal_engine state per bar (entry)
+    │     └── calls monitor/monitor.py evaluate_position() per bar (exit)
     └── prints summary table
 ```
 
@@ -194,9 +196,9 @@ plan keys off the result.
 
 ## 4. Entry Signals
 
-Source: `src/cfd_trading/backtest/signals.py`
+Source: `src/cfd_trading/strategy/signal_engine.py` — the **shared** module imported by *both* the live monitor and the backtest engine (promoted from the former `backtest/signals.py` on 2026-05-15 so live and backtest cannot drift).
 
-Both signal functions take a **list of `OHLCBar` objects in chronological order** (latest bar last) and return `"LONG"`, `"SHORT"`, or `None`.
+The signal classes (`MomentumSignalState`, `MeanReversionSignalState`, `ORBSignalState`) stream one `OHLCBar` per `update()` call and return `"LONG"`, `"SHORT"`, or `None`. The `momentum_signal()` / `mean_reversion_signal()` functional wrappers (list of bars → last decision) are unit-test conveniences.
 
 ### 4.1 Momentum signal
 
@@ -248,7 +250,7 @@ gap_pct     = |EMA_9 − EMA_21| / EMA_21  (must exceed 0.05% to fire)
 m30_bullish = OLS slope of the last 30 closes > 0
 ```
 
-**`check_exit()`:** Always returns `None` — momentum exits are handled entirely by `evaluate_position()` (trailing stop, take profit, hard stop).
+**`check_exit()`:** Returns `"EMA cross-back"` when EMA-fast crosses back through EMA-slow *against* the open position — the deterministic momentum **signal-exit** (SYSTEM_DESIGN §3.7 rule 4), evaluated every cycle by both the live monitor and this engine. Returns `None` while there is no open position or no adverse cross. Hard stop, trailing stop, and take profit in `evaluate_position()` are all evaluated *before* `check_exit()`, so they take priority.
 
 ### 4.2 Mean reversion signal
 
@@ -274,11 +276,11 @@ m30_bullish = OLS slope of the last 30 closes > 0
 
 **Key detail — windowed z-score:** Only the last 20 bars contribute to `mean` and `stddev`. Older history is ignored.
 
-**`check_exit()` priority:**
-1. **Hold cap** — returns `"Hold cap"` after `max_hold_bars` bars in trade (default **5**). If the position is not moving toward target within 5 bars, it is likely caught in a trend — exit flat.
-2. **Z-score midline** — returns `"Z-score midline"` when `abs(last_z) <= zscore_exit_threshold` (default **0.5**). Fires when the expected reversion has materialised.
+**`check_exit()`:** Returns `"Z-score midline"` when `abs(last_z) <= zscore_exit_threshold` (default **0.5**) — the deterministic MR **signal-exit** (SYSTEM_DESIGN §3.7 rule 4), fired when the expected reversion has materialised. Returns `None` otherwise.
 
-Hard stop and take profit in `evaluate_position()` take priority over both (checked before `check_exit()`). The engine calls `notify_entry()` / `notify_exit()` to synchronise the hold-cap bar counter with actual position state.
+> *(2026-05-15)* The former **hold-cap** (`"Hold cap"` after `max_hold_bars`, default 5) was a backtest-only stand-in for the missing time-exit. It was **removed** when the real time-exit was wired and `signal_engine` became shared with the live monitor — `MeanReversionSignalState` no longer accepts a `max_hold_bars` arg (`tests/unit/test_signals.py::test_max_hold_bars_constructor_arg_removed` asserts this). Only the z-midline half was promoted into the shared module.
+
+Hard stop and take profit in `evaluate_position()` are evaluated *before* `check_exit()`, so they take priority. The engine calls `notify_entry()` / `notify_exit()` to keep the signal state's position side in sync.
 
 **Indicator formula:**
 
@@ -344,19 +346,22 @@ The engine delegates per-bar exit decisions to `monitor/monitor.py::evaluate_pos
 | Priority | Rule | Condition | Action |
 |----------|------|-----------|--------|
 | 1 | Hard stop | BUY: close ≤ stopLevel / SELL: close ≥ stopLevel | CLOSE |
-| 2 | Trailing stop ratchet | BUY: candidate_stop > current_stop / SELL: candidate_stop < current_stop | ADJUST |
+| 2 | Trailing stop ratchet | momentum only (MR & ORB disabled): BUY candidate_stop > current_stop / SELL candidate_stop < current_stop | ADJUST (ratchet only — never widens) |
 | 3 | Take profit | BUY: close ≥ profitLevel / SELL: close ≤ profitLevel | CLOSE |
-| 4 | Time exit | session_end_time set and within close window | CLOSE |
-| 5 | Default | None of the above | HOLD |
+| 4 | **Signal exit** | per-strategy `signal_engine.check_exit()` — MR: `\|z\| ≤ 0.5`; momentum: EMA cross-back; ORB: none | CLOSE |
+| 5 | Time exit | session_end_time set and within close window | CLOSE |
+| 6 | Default | None of the above | HOLD |
 
-For the **trailing stop**, the candidate stop is:
+This is the **same 6-rule ordered set** as the live monitor (SYSTEM_DESIGN §3.7) — `evaluate_position()` is one function shared by both, so the priority order cannot drift.
+
+For the **momentum trailing stop**, the candidate stop is `best_favourable_price ∓ trail_distance`, where `trail_distance = ATR₁₄@entry × atr_multiplier` (1.5) — captured once at entry from the shared `signal_engine` and **fixed for the trade** (resolved 2026-05-15; superseded the old `min/max_distance_pct` fixed-% model):
 
 ```
-BUY:  candidate = close × (1 - min_distance_pct/100)
-SELL: candidate = close × (1 + min_distance_pct/100)
+BUY:  candidate = max_close_since_entry  − ATR14@entry × 1.5
+SELL: candidate = min_close_since_entry  + ATR14@entry × 1.5
 ```
 
-The stop only ratchets in the profitable direction. Once raised (BUY) or lowered (SELL), it never reverses.
+The stop only ratchets in the profitable direction. Once raised (BUY) or lowered (SELL), it never reverses. MR and ORB set `trailing_stop.enabled: false`, so rule 2 is inert for them.
 
 > **Shared deterministic exit path (implemented 2026-05-15).**
 > Exits are the full ordered set: hard stop → trailing → take-profit → **signal-exit**
@@ -479,7 +484,7 @@ BACKTEST_DB_PATH=/mnt/c/Users/chris/dev/trading-data/trading.db \
 | `--instruments LIST` | Comma-separated subset of watchlist epics (mutually exclusive with `--epic` and `--all-epics`). Used for audit runs on a trimmed universe. Errors if any name is not in `config/watchlist.yaml`. Example: `EURUSD,GBPUSD,US500,DE40,GOLD`. |
 | `--resolution` | Target bar resolution: `M1` `M5` `M15` `M30` `M60`. **Default: each strategy's own `resolution:` from its YAML** (single source of truth, shared with the live monitor — **momentum `M30`**, mean_reversion `M1`, orb `M15`). Pass this only to override for an experiment. The audit re-baseline runs momentum at its YAML M30 and pins MR/ORB to `M15` via this flag. Bars are aggregated from `--source-resolution` if the two differ. |
 | `--source-resolution` | Resolution of bars read from the DB (default: `M1`). Set to match `--resolution` to skip aggregation when native bars are stored at the target resolution (e.g. native M15 from MT5). |
-| `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for Phase A audit slicing — see `AUDIT_PLAN.md`. |
+| `--output PATH` | Optional. Write all completed trades from the run as a single Parquet file. One row per trade; columns match the `Trade` dataclass plus `resolution`. Requires `pyarrow` (declared in `pyproject.toml` as a runtime dep). Required for the Phase A audit slicing — see `docs/STRATEGY_AUDIT.md` (audit closed 2026-05-18). |
 | `--momentum-relaxed` | Audit-mode momentum filter relaxation: ADX threshold 20 (from 25) and EMA gap floor 0.02% (from 0.05%). Used in Phase A2 to lift momentum trade counts to a statistically sliceable density. Strict defaults remain unchanged for live runs. |
 | `--session-close-utc HH:MM` | Daily intraday close time (UTC), applied to every simulated trading day for every instrument. Default `21:00`. Drives the mechanical time-exit (`close_minutes_before_session_end` before this). Guarantees no overnight/weekend holds. See §5.6. |
 
@@ -574,8 +579,7 @@ Tests for `backtest/engine.py`:
 | `test_net_pnl_pts_is_sum_of_trade_pnl` | Single stop-out trade; `net_pnl_pts` equals `trade.pnl_points` and is negative |
 | `test_avg_r_computed_correctly` | Stop-out at 0.50 from entry 1.10; asserts `avg_r = net_pnl_pts / (1 × 1.10 × 0.02)` and is negative |
 | `test_avg_r_zero_when_no_trades` | Empty bars → `avg_r == 0.0` |
-| `test_mean_reversion_midline_exit` | 19 flat bars + 17 bars at 1.5; z drops to 0.5 at bar 34 (window mean rises) → `exit_reason == "Z-score midline"` (tested with `max_hold_bars=50` to isolate midline) |
-| `test_hold_cap_closes_mean_reversion_trade` | Signal fires, price stays at spike level; default `max_hold_bars=5` → `exit_reason == "Hold cap"` after 5 bars |
+| `test_mean_reversion_midline_exit` | z reverts toward 0; `exit_reason == "Z-score midline"` (the MR signal-exit; no hold-cap involved — that arg no longer exists) |
 | `test_spread_adjusts_buy_entry_and_exit` | BUY with `spread_pts=0.10`: `entry_price = open + 0.05`, `exit_price = close - 0.05` |
 | `test_spread_adjusts_sell_entry_and_exit` | SELL with `spread_pts=0.10`: `entry_price = open - 0.05`, `exit_price = close + 0.05` |
 | `test_hard_stop_takes_priority_over_midline_exit` | Price crashes far beyond stop level → hard stop fires before `check_exit()` is reached |
@@ -586,7 +590,8 @@ Tests for `backtest/engine.py`:
 |---|---|
 | `TestADXGate` | `test_momentum_suppressed_when_adx_below_threshold`, `test_momentum_fires_when_adx_gate_disabled`, `test_momentum_suppressed_by_high_explicit_threshold`, `test_mean_reversion_fires_in_flat_market`, `test_mean_reversion_suppressed_in_trending_market` |
 | `TestATRGate` | `test_gate_blocks_when_spread_large_relative_to_atr`, `test_gate_disabled_when_spread_zero`, `test_gate_permissive_while_atr_warming_up` |
-| `TestHoldCap` | `test_hold_cap_fires_after_max_bars`, `test_hold_cap_not_triggered_before_max_bars`, `test_hold_cap_cleared_after_notify_exit`, `test_hold_cap_priority_over_z_score_midline` |
+| `TestHoldCapRemoved` | `test_max_hold_bars_constructor_arg_removed` (constructor rejects `max_hold_bars`), `test_long_hold_never_returns_hold_cap` (`"Hold cap"` is never returned — exit only via z-midline / price / time rules) |
+| `TestMomentumCheckExit` | `test_long_exits_on_downward_cross_back`, `test_short_exits_on_upward_cross_back` (→ `"EMA cross-back"`), `test_momentum_check_exit_none_without_position` |
 | `TestM30Gate` | `test_gate_passes_long_when_m30_bullish`, `test_gate_blocks_long_when_m30_bearish`, `test_gate_disabled_when_m30_gate_false`, `test_gate_blocks_short_when_m30_bullish`, `test_gate_permissive_during_warmup` |
 | `TestCheckExit` | `test_mean_reversion_check_exit_none_before_window_full`, `test_mean_reversion_check_exit_none_when_z_large`, `test_mean_reversion_check_exit_fires_when_z_small`, `test_momentum_check_exit_always_none` |
 
@@ -628,7 +633,7 @@ Tests for `backtest/sessions.py`:
 
 ### 7.4d `tests/unit/test_orb.py` (23 tests)
 
-Tests for `ORBSignalState` in `backtest/signals.py`:
+Tests for `ORBSignalState` in `strategy/signal_engine.py`:
 
 | Test class | What it verifies |
 |---|---|
@@ -670,7 +675,7 @@ pytest tests/unit/test_signals.py tests/unit/test_engine.py tests/unit/test_run.
 pytest tests/unit/ -v
 ```
 
-All 284 unit tests pass with no network access or real DB file.
+All 329 unit tests pass with no network access or real DB file.
 
 ---
 
@@ -769,7 +774,7 @@ Win% 55–70%  |  PF 1.5–2.5  |  MaxDD% < 4%  |  Stop% 10–25%  |  Sig/wk 1�
 | PF < 1.0 across multiple instruments | Strategy has no edge on this data | Re-examine signal logic or instrument suitability |
 | AvgR negative despite Win% > 50% | Wins are small, losses are large (inverted R:R) | Check if stop is wider than TP in practice — can happen with trailing stop ratcheting |
 | Stop% > 60% | Stop too tight OR signal fires against the trend | Widen `default_pct` or strengthen signal filter |
-| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `signals.py` (momentum, default 0.05%, tuned range 0.01–0.10%) |
+| Sig/wk > 15 | Signal threshold too loose | Tighten z-score threshold (mean reversion) or increase `_MIN_EMA_GAP_PCT` in `strategy/signal_engine.py` (momentum, default 0.05%, research-validated floor — see `RESEARCH.md`) |
 | Sig/wk = 0 | Instrument never triggers the signal | Instrument may be unsuitable for this strategy style |
 | MaxDD% > 15% with PF near 1.0 | Strategy earns slowly and has catastrophic drawdowns | This risk profile is not suitable for live deployment |
 | `inf` PF on < 15 trades | Sample too small to trust | Run on more data or wait for incremental DB updates |
@@ -838,7 +843,7 @@ Entry is simulated at `next_bar.open ± spread_pts/2` (BUY at ask, SELL at bid);
 
 What is **not** modelled:
 - Slippage beyond the half-spread fill assumption (live MARKET orders may slip further during news / thin liquidity)
-- Time-varying spread (`backtest/spreads.py` returns a single static value per instrument; Phase A4 spread-widening checks need a multiplier or live snapshots — see `AUDIT_PLAN.md`)
+- Time-varying spread (`backtest/spreads.py` returns a single static value per instrument; A4 news-proximity / spread-widening was carried into the next-phase debate — see `docs/STRATEGY_AUDIT.md`)
 
 ### 9.3 No parallel positions
 

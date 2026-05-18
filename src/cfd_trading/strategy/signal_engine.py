@@ -31,12 +31,14 @@ from collections import deque
 
 from cfd_trading.storage.repository import OHLCBar
 
-# Minimum fractional gap between EMA9 and EMA21 at the moment of crossover.
-# Filters noise crossovers where the two EMAs are nearly identical on M1 bars.
-# Tuned empirically: 0.02% gives the best trade count / signal quality balance
-# across the 11-instrument watchlist.  Higher values (>0.05%) leave too few trades
-# to be statistically meaningful; lower values (<0.01%) flood with noise signals.
-_MIN_EMA_GAP_PCT = 0.0005   # 0.05% — research-validated floor for index CFDs (4 pts at 8,000)
+# Minimum fractional |EMA9 - EMA21| / EMA21 required to *confirm* a pending
+# crossover.  It is checked on the post-cross confirmation bars, NOT at the cross
+# itself (there the two EMAs are ≈coincident and the gap is structurally ~0 — the
+# old "gap test at the cross bar" rejected ~99% of crossovers; see momentum §5.2).
+# 0.05% is the research-validated floor for index CFDs: ≈4 pts at 8,000 = 4× a
+# typical 1-pt spread (signal-to-cost ratio 4×, positive-expectancy territory).
+# RESEARCH.md rejects the older 0.02% as below the noise/spread floor (ratio ~1.6×).
+_MIN_EMA_GAP_PCT = 0.0005   # 0.05% — see docs/RESEARCH.md "Minimum EMA Gap Filter"
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,13 @@
 # CFD Trading System — Strategy Catalog & Mathematical Reference
 
-**Version:** 1.2  
-**Date:** May 2026  
-**Status:** S1 (momentum) and S2 (mean reversion) fully implemented and backtested; S3 deferred  
-**Companion to:** `docs/SYSTEM_DESIGN.md`, `config/strategies/`, `src/cfd_trading/tools/scan_tools.py`, `docs/BACKTESTING.md`  
+**Version:** 1.3  
+**Date:** 2026-05-17  
+**Status:** S1 (momentum), S2 (mean reversion) and S5 (ORB) fully implemented and backtested; S3 (Donchian breakout) and S4 (sentiment overlay) deferred  
+> **⚠️ STRATEGY AUDIT VERDICT 2026-05-18 (`docs/STRATEGY_AUDIT.md`):** Phase A kill-criterion triggered — **S2/mean-reversion DROPPED** (non-viable on retail CFD; literature-confirmed); **S1/momentum & S5/ORB UNVALIDATED** (no edge survived Deflated-Sharpe / out-of-sample). No strategy is deploy-ready; the system is pivoting to a fundamental strategy debate. The maths/specs below remain accurate as *implemented*, not as *validated edges*.  
+**Companion to:** `docs/SYSTEM_DESIGN.md`, `docs/GLOSSARY.md`, `config/strategies/`, `src/cfd_trading/tools/scan_tools.py`, `docs/BACKTESTING.md`  
 **Repo:** github.com/cdr74/cfd-trading (private)
+
+> **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
 
 > **Authoritativeness note:** Where this document conflicts with `README.md` or the
 > `config/strategies/` files, the repo files are correct. This catalog records
@@ -42,14 +45,18 @@ Where `r_t = log(S_t / S_{t-1})` (log return — additive over time).
 | Sentiment | Capital.com API | `longPositionPercentage` / `shortPositionPercentage` — see §8 |
 | Open positions | Live from broker | Positions open in this instrument right now |
 
-**Additional indicators to be added per strategy** (computed in Python from the same bar data — no new API calls required unless noted):
+**Per-strategy indicators** (computed in Python from the same bar data — no new API calls unless noted):
 
-| Indicator | Required by | How |
+| Indicator | Required by | Status / How |
 |---|---|---|
-| EMA_fast, EMA_slow, signal z-score | S1 | Computed from 60 × 1-min bars in `analyze_instrument` |
-| Rolling mean, rolling std, z_t | S2 | Computed from 60 × 1-min bars in `analyze_instrument` |
-| Donchian channel upper/lower | S3 | Requires a second `get_prices` call at 5-min resolution |
-| Vol-scaled suggested size | All | Needs `target_risk_pct` added to strategy YAML — see §9 |
+| `ema_9`, `ema_21` | S1 | **Done (Phase 9)** — `_compute_ema(bars, 9/21)` on 60×1-min closes |
+| `zscore` (20-bar price z) | S1, S2 | **Done (Phase 9)** — single `_compute_zscore(bars, 20)`, shared by S1 & S2 |
+| Donchian channel upper/lower | S3 | **Deferred** — would need a second `get_prices` at 5-min resolution |
+| Vol-scaled `suggested_size` | All | **Done (Phase 9)** — `target_risk_pct` in strategy YAML; see §9 |
+
+Note: `analyze_instrument` returns **one** 20-bar price `zscore` (the same `_compute_zscore`
+helper for both S1 and S2) — there is no separate "signal z-score" vs "z_t"; the §5.1
+`signal_t/rolling_std(50)` normalisation is a design concept, not implemented.
 
 **No news/event calendar is available.** Capital.com does not expose a news or economic calendar via its API. Strategies that reference news proximity as a gate (e.g. S2 §6.2) must rely on human awareness, not automated gating.
 
@@ -121,12 +128,21 @@ At each entry cycle, flip a fair coin for direction (LONG/SHORT). Size at strate
 
 ```
 signal_t = EMA_fast(S_t)  -  EMA_slow(S_t)
-z_t      = signal_t  /  rolling_std(signal_t, window=50)
+z_t      = signal_t  /  rolling_std(signal_t, window=50)     # design concept — NOT implemented
 ```
 
-**Default parameters:** fast = 9 bars, slow = 21 bars (both on 1-min bid close). Starting points — tune per asset on demo data.
+**Default parameters:** fast = **9 bars**, slow = **21 bars** — bar-count windows applied at
+the **strategy resolution**: **M30** bars for the deterministic `signal_engine` (live monitor +
+backtest); 1-min closes only in Claude's separate `analyze_instrument` context (§5.2). "Starting
+points — tune per asset" remains the intent.
 
-| Condition | Action |
+> **Implemented entry ≠ this z_t table.** The `signal_t / rolling_std(50)` normalisation and the
+> ±1.0 z-threshold table below are the original *design concept* and are **not** what the code
+> does. The implemented momentum entry is the **pending-crossover + confirmation-window**
+> mechanism in §5.2 (`MomentumSignalState`, M30, no normalised z_t). The table is retained for
+> design rationale only.
+
+| Condition (design concept) | Action |
 |---|---|
 | z_t > +1.0 AND EMA_fast slope positive | LONG signal — confirm with prior bar momentum |
 | z_t < -1.0 AND EMA_fast slope negative | SHORT signal — confirm with prior bar momentum |
@@ -141,13 +157,18 @@ z_t      = signal_t  /  rolling_std(signal_t, window=50)
 |---|---|---|
 | EMA_9 | Exponential WMA, span=9, on 1-min close-bid | Fast trend proxy |
 | EMA_21 | Exponential WMA, span=21, on 1-min close-bid | Slow trend proxy |
-| signal_t | `EMA_9 - EMA_21` | Raw crossover value |
-| z_t | `signal_t / rolling_std(50)` | Regime-normalised signal |
+| signal_t | `EMA_9 - EMA_21` (Claude derives from the two EMAs) | Raw crossover value |
+| zscore | `(close − mean) / std` over the last **20** 1-min closes (`_compute_zscore(bars, 20)`) | Price-extension context |
 | ATR_14 | Already computed by `analyze_instrument` | Volatility context for stop sizing |
-| EMA_slope | `EMA_9[t] - EMA_9[t-3]` | Direction confirmation |
 | spread_pct | Already computed by `analyze_instrument` | Cost-viability check |
 
-**Implementation note:** EMA_9, EMA_21 are computed by `analyze_instrument` from the 60 × 1-min bars (Phase 9). `signal_t` (EMA_9 − EMA_21) and trend slope are also returned. The normalised z_t (signal_t / rolling_std) is not yet computed — Claude reasons qualitatively over the gap instead.
+**Implementation note (code reality):** `analyze_instrument` (`tools/scan_tools.py`) fetches
+`get_prices(epic, resolution="MINUTE", max=60)` and returns `ema_9`, `ema_21`, and a 20-bar
+**price** `zscore` (`_compute_zscore`, the *same* helper S2 uses — `(close−μ)/σ` over the last
+20 closes), **not** the `signal_t / rolling_std(50)` normalisation of §5.1 (which is not
+implemented anywhere). Claude derives the EMA gap and reasons qualitatively over it; there is no
+`EMA_slope = EMA_9[t]−EMA_9[t-3]` field — slope is the deterministic engine's 22-bar OLS, used
+inside `signal_engine`, not surfaced to the prompt.
 
 **Backtest signal note** *(redesigned 2026-05-15; shared `strategy/signal_engine.py`, used by both the backtest and the live monitor):*
 
@@ -159,13 +180,20 @@ Momentum runs on **M30** bars (`momentum.yaml resolution: M30` — single source
 
 ### 5.3 Stop Loss & Take Profit Rules
 
-| Parameter | Rule | YAML field |
+| Parameter | Rule (deterministic engine — code reality) | YAML field |
 |---|---|---|
-| Hard stop loss | ATR_14 × 1.5 below entry (long) / above entry (short) | `risk.stop_loss.default_pct` |
-| Hard stop ceiling | Must not exceed `max_pct` from YAML | `risk.stop_loss.max_pct = 5.0%` |
-| Trailing stop | *(Resolved 2026-05-15.)* Ratchet-only. Distance = **ATR₁₄ at entry × 1.5, fixed for the trade** (not recomputed per bar). Stop = best-favourable-price ∓ distance; never loosens. ATR comes from the shared streaming `signal_engine` (live + backtest, identical). | `trailing_stop.atr_multiplier = 1.5` |
-| Take profit (initial) | ATR_14 × 2.5 from entry — minimum R:R 1.5:1 | `risk.take_profit.min_rr_ratio = 1.5` |
+| Hard stop loss | `stop_distance = fill_price × default_pct/100` (= **2.0%** of entry); BUY `fill − stop_distance`, SELL `fill + stop_distance`. **Not ATR-based.** | `risk.stop_loss.default_pct = 2.0%` |
+| Hard stop ceiling | `default_pct` must not exceed `max_pct`; preflight hard-rejects proposals beyond it | `risk.stop_loss.max_pct = 5.0%` |
+| Trailing stop | *(Resolved 2026-05-15.)* Ratchet-only. Distance = **ATR₁₄ at entry × 1.5, fixed for the trade** (not recomputed per bar). Stop = best-favourable-price ∓ distance; never loosens. ATR comes from the shared streaming `signal_engine` (live + backtest, identical). This is the **only** place ATR enters momentum stops. | `trailing_stop.atr_multiplier = 1.5` |
+| Take profit (initial) | `stop_distance × min_rr_ratio` (= **1.5 ×** the % stop distance), not ATR×2.5 | `risk.take_profit.min_rr_ratio = 1.5` |
 | Time exit | `close_minutes_before_session_end = 30` — enforced by monitor | `risk.time_exit` |
+
+> **Engine rule vs Claude proposal.** The table above is the *deterministic* rule used by the
+> backtest and as the live preflight bound (a fixed % stop, TP a multiple of it). In the live
+> entry flow Claude *may propose* an ATR-derived stop/TP from `analyze_instrument` context (e.g.
+> ATR₁₄×1.5 stop, ×2.5 TP — the original §5.1 heuristic); `preflight.py` then enforces it
+> against `default_pct`/`max_pct`/`min_rr_ratio`. The ATR multiples are a Claude sizing
+> heuristic, **not** the mechanical rule.
 
 **EMA cross-back exit:** *(Revised 2026-05-15.)* This is now a **deterministic monitor rule** — SYSTEM_DESIGN §3.7 rule 4 (signal-exit). The monitor maintains the strategy's streaming signal state (shared `strategy/signal_engine`, warm-up back-filled on start) and closes the position when EMA-fast crosses back through EMA-slow against it, evaluated every 60 s — no longer dependent on Claude noticing it in the conversation. Claude may still propose CLOSE earlier from its own analysis; the monitor rule is the guaranteed floor.
 
@@ -198,13 +226,13 @@ sigma_t = rolling_std(close_bid_t,  window=N)
 z_t     = (close_bid_t - mu_t) / sigma_t
 ```
 
-**Default parameter:** N = 30 bars (1-min). Mean reversion is only valid within a session — do not carry overnight.
+**Default parameter:** N = **20** bars (M1) — `MeanReversionSignalState._WINDOW = 20` in `strategy/signal_engine.py` is the ground truth (live + backtest). Mean reversion is only valid within a session — do not carry overnight.
 
 | z_t value | Signal |
 |---|---|
 | z_t > +2.0 | SHORT entry — price extended above mean |
 | z_t < -2.0 | LONG entry — price extended below mean |
-| 0.0 < \|z_t\| < 0.3 | Exit zone — close existing position |
+| \|z_t\| ≤ 0.5 | Exit zone — close existing position (`zscore_exit_threshold` default **0.5**; deterministic monitor signal-exit, §3.7 rule 4) |
 | 1.0 < \|z_t\| < 2.0 | Wait — not extended enough to justify entry |
 | \|z_t\| > 3.0 | Extreme — possible trend break; do not enter, re-evaluate regime |
 
@@ -212,14 +240,30 @@ z_t     = (close_bid_t - mu_t) / sigma_t
 
 ### 6.2 Regime Validity Check (Critical)
 
-Gate on all of the following before any signal evaluation:
+**Implemented gates (`MeanReversionSignalState`, code reality).** A signal fires only when *all*
+hold; the conceptual table below is the design rationale, not the literal predicates:
+
+| Implemented gate | Exact predicate |
+|---|---|
+| Window | rolling **20** M1 closes (`_WINDOW = 20`); no signal until full |
+| Entry threshold | `z ≥ +2.0` → SHORT; `z ≤ −2.0` → LONG; else None |
+| ADX regime gate | suppressed when `ADX(14) ≥ adx_threshold` (default **25.0**) — trending market; permissive while ADX warming up |
+| ATR viability gate | suppressed when `ATR(14) < 4 × spread_pts`; disabled when `spread_pts = 0.0` (the default in unit tests) |
+| Reversion exit | `\|z\| ≤ zscore_exit_threshold` (default **0.5**) → deterministic monitor signal-exit (§3.7 rule 4) |
+| News / event proximity | **No automated gate** — Capital.com has no news-calendar API. Operator must avoid running S2 during known high-impact windows (NFP, FOMC). |
+
+**Conceptual model (design intent — not the implemented predicates):**
 
 | Check | Gate condition |
 |---|---|
 | EMA trend filter | `ABS(EMA_9 - EMA_21) / price < 0.001` — no strong trend present |
 | ATR range | ATR_14 within normal session range — not expanding |
 | Recent z-score history | z_t must have crossed zero at least twice in the last 60 bars |
-| News / event proximity | **No automated gate available** — Capital.com does not provide a news calendar API. Operator must avoid running S2 during known high-impact event windows (e.g. NFP, FOMC). |
+| News / event proximity | as above — operator-managed, no API |
+
+The implemented **ADX ≥ 25** suppression is the code's stand-in for the conceptual "EMA trend
+filter" / "ATR range" intent; the "z crossed zero twice in 60 bars" history check is **not**
+implemented.
 
 ### 6.3 Stop Loss & Exit Rules
 
@@ -475,7 +519,7 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 **DST caveat:** Session open times are fixed UTC values. European instruments shift by 1 hour around March/October clock changes. For a 4-month dataset this affects ~2 weeks of sessions and is acceptable for backtesting purposes.
 
-**Backtest implementation:** `ORBSignalState` in `backtest/signals.py`. Run with `--resolution M15` — the ORB is defined on M15 bars aggregated from M1 data. The per-instrument session time is looked up in `backtest/sessions.py` and passed via `signal_kwargs`.
+**Implementation:** `ORBSignalState` in `strategy/signal_engine.py` — the shared module imported by *both* the live monitor and the backtest engine (no `backtest/signals.py` — that file was promoted to `strategy/signal_engine.py` on 2026-05-15). Runs at the strategy's YAML `resolution: M15` (M1 bars aggregated in-process; override with `--resolution`). The per-instrument session time is looked up in `backtest/sessions.py` and passed via `signal_kwargs`.
 
 ---
 

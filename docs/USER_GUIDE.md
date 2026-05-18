@@ -3,6 +3,8 @@
 How to set up, start, and operate the CFD trading system.  
 For architecture and design decisions see `docs/SYSTEM_DESIGN.md`. For strategy details see `docs/CFD_STRATEGY_CATALOG.md`.
 
+> **Abbreviations & terms:** see [`docs/GLOSSARY.md`](GLOSSARY.md) — single source of truth for every acronym used in this repo.
+
 ---
 
 ## Contents
@@ -165,7 +167,7 @@ Claude calls `validate_proposal` (preflight check against `risk.yaml`) and, if i
 
 ### Step 6 — Monitor runs automatically
 
-Once a position is open, the monitor subprocess checks it every 60 seconds. It evaluates four rules in order (hard stop → trailing stop ratchet → take profit → time exit) and acts autonomously. No further action is needed from you.
+Once a position is open, the monitor subprocess checks it every 60 seconds. It evaluates the six rules in priority order (hard stop → trailing stop ratchet → take profit → signal-exit → time exit → hold) and acts autonomously. The **signal-exit** is a deterministic per-strategy reversal check (mean reversion: z back to midline; momentum: EMA cross-back; ORB: none) — so a position bails on a signal reversal without waiting for the hard stop. No further action is needed from you.
 
 Check status any time:
 > "What's the current status?" or "How's the position doing?"
@@ -257,7 +259,7 @@ pip install -e ".[dev]"
 ```bash
 cd ~/dev/trading/cfd-trading
 source .venv/bin/activate
-pytest tests/unit/ -v            # 190 tests, should run in < 30s
+pytest tests/unit/ -v            # 329 tests, should run in < 30s
 ```
 
 ### 7.3 Running integration tests (needs demo credentials)
