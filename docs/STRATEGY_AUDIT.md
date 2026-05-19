@@ -162,6 +162,92 @@ before implementing). Threads:
   changes the premise (M1/M5 primary TF and LLM-as-signal were already
   rejected; Carver's viable MR bands need passive-fill or multi-year holds).
 
+### Decisions (2026-05-19) — Fork A committed; D3/BR3 first
+
+**Cost premise re-tested and CLOSED** (supersedes any "is 0.75 bps too high"
+doubt). Re-derived from the 19,061-trade archive (`trades_M15.parquet`),
+mid-to-mid vs fill-to-fill; reconciles exactly with the §2/§7 per-class nets
+(Index −0.29 / FX −0.82 / GOLD −2.73):
+
+- Realized round-trip cost = **exactly one quoted `spread_at_entry`**: Index
+  0.753 / FX 0.835 / Commodity 1.280 bps. 0.75 is the *realized* blended cost
+  across the actual entry timestamps, **not** a padded assumption; the ~0.6 bps
+  headline *understates* what these trades paid (fills cluster at wider-spread
+  session opens / volatile bars).
+- **Kill-criterion survives at ZERO friction.** Gross mid-to-mid edge is
+  negative or ≈0 in **7 of 9** class×strategy cells. Cutting cost cannot rescue
+  a frictionless-negative strategy; the 3× multiplier never bound the verdict.
+- Only positive *frictionless* signals: Index-ORB (+1.92 gross / +1.17 net —
+  already killed on DSR/bootstrap/OOS in §5, **not** on cost) and FX
+  mean-reversion (+0.236 gross, n=6,152), which pays only at round-trip cost
+  **<~0.24 bps**. → This *quantifies* fork C's threshold (institutional/ECN,
+  ~3× tighter than retail CFD); it does **not** reopen the audit.
+
+**Decision 1 — Fork A committed (horizon attack, in CFD).** Rationale: since
+zero cost does not rescue the strategies, the only lever that changes the gross
+number is a *bigger per-trade move*. Forks B/C/D remain on record as fallbacks
+(C now carries the quantified <~0.24 bps target).
+
+**Decision 2 — D3/BR3 first; D2 deferred.** Open the Zarattini/Barbon/Aziz
+intraday-continuation variant (BR3) on the existing rebuilt engine first — it
+sits on the only family with both a real frictionless edge and ample sample
+(Index-ORB), is the best-evidenced new form in the scan, and needs no new
+external data. D2 (news-surprise drift) is deferred until D3 clears or fails
+the D1 anchor + DSR/min-sample. D2 blockers recorded for when it reopens:
+(i) it **must** be built as one *pooled standardized-surprise* strategy — never
+per-event cells (per-cell ≈10–12 trades/3 yr = the §5 thin-cell trap);
+(ii) hard external-data gate — a fidelity-true, timezone-validated historical
+calendar with actual + consensus forecast over 2023-05→2026-05 × the
+8-instrument universe, or D2 is blocked the way XBRUSD blocked Lundström's oil.
+
+**D3/BR3 spec — RESOLVED (2026-05-19), debate concluded:**
+
+- **Universe:** pooled US500 + DE40 + UK100 as **one** strategy — never
+  per-cell (the §5 / D2 thin-cell discipline). A *generalization* of Zarattini
+  (single-instrument SPY), not a replication.
+- **Timeframe:** **M15** (M1/M5 hard non-goal; Zarattini's native 1–5 min is
+  off the table). This is a Zarattini-*inspired* test, not a replication — the
+  BR-caveat compounds (un-re-costed for CFD **and** coarser TF). Label results
+  accordingly.
+- **Entry:** first session breach of `open ± k·ATR₁₄` (σ from the engine's
+  existing ATR₁₄ primitive — one volatility primitive, fidelity-clean), direction
+  = breach side. `k` to be pinned in the architecture sub-design.
+- **Exit:** hard stop → **dynamic, bar-recomputed ATR trailing** → no TP →
+  time-exit → global 21:00 UTC session close ("hold to close" = trail +
+  session-close, no fixed TP — faithful to Zarattini's trail/close design).
+- **Dynamic trailing built on BOTH sides — full parity.** The shared
+  deterministic exit path is re-architected for bar-recomputed trailing AND the
+  live `monitor/monitor.py` is updated to mirror it; the live↔backtest parity
+  test is extended and must re-pass before any D3 result is trusted. A
+  backtest-only dynamic exit was explicitly rejected as fidelity-false (it
+  reproduces the §1 error that invalidated and deleted the prior audit).
+- **DSR/min-sample pre-registered before the run** (standing gate): declared N,
+  SR₀ from cross-cell Sharpe dispersion (the §5 method), 3× cost gate at the
+  Index D1 anchor (US500 2.66 / DE40 1.47 / UK100 3.05 bps/trade), 10k
+  bootstrap CI, OOS time-split, pre-committed kill-criterion. No post-hoc
+  cell mining.
+
+**Gate now moves from debate to design-docs-before-code (CLAUDE.md §1).**
+The strategy debate has concluded. Before any implementation: (a) a
+parity-preserving *dynamic-trailing architecture* sub-design (deterministic
+bar-recomputed trail executed identically by backtest and live monitor — the
+`how`, itself a §1 "always interactive" design decision), (b) update
+`docs/SYSTEM_DESIGN.md` (exit-path architecture) and
+`docs/CFD_STRATEGY_CATALOG.md` (the D3/BR3 algorithm), (c) implement both
+sides + extend the parity test + unit tests, (d) pre-register DSR, then run.
+Risk accepted by explicit decision: production exit logic is modified before
+D3 has shown any edge.
+
+**Progress (2026-05-19).** (a) Sub-design CONCLUDED: dynamic **Chandelier**
+trail — long `max_high_since_entry − 1.5·ATR₁₄(closed bars)`, short symmetric;
+recomputed every completed M15 bar from closed bars only; stateless-replay;
+*may loosen* on vol expansion (literature-faithful); trigger logic unchanged;
+one shared pure function + golden-trace parity test extended to the full
+per-bar stop series. (b) Design docs updated: `SYSTEM_DESIGN.md` §3.7.1 +
+§3.10, `CFD_STRATEGY_CATALOG.md` §14 (S6) + references. Next: (c) implement
+both sides + extend parity test + unit tests (tasks #3–5), (d) pre-register
+DSR (#6), then run (#7).
+
 ### D1 anchor — the cost reality (quantified)
 
 The "is it winnable" question is not qualitative. From the 19,061-trade

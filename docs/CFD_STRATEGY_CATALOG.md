@@ -523,7 +523,72 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 ---
 
-<!-- §14 Backtest Experiment Log removed 2026-05-15 — all results invalidated (time-exit disabled in engine); see project rebuild -->
+<!-- Backtest Experiment Log removed 2026-05-15 — all results invalidated (time-exit disabled in engine); see project rebuild & docs/STRATEGY_AUDIT.md -->
+
+---
+
+## 14. S6 — Volatility-Band Intraday Continuation (Zarattini-inspired, D3/BR3)
+
+**Status:** algorithm decided 2026-05-19 (strategy debate Part 2 → Fork A);
+**not yet implemented**. Full decision record + the pre-registered
+DSR/min-sample plan: `docs/STRATEGY_AUDIT.md` Part 2. This is the post-audit
+pivot's first strategy — no deploy claim until it clears the pre-committed
+kill-criterion.
+
+**Research basis:** Zarattini, Barbon & Aziz (2024) — SPY 2007–2024, ~19.6 %
+ann., Sharpe 1.33. Structural edge: an intraday breach of a volatility-scaled
+band around the session open predicts continuation to the close. **BR-caveat:**
+the cited result is SPY (futures/ETF) at 1–5 min and was never re-costed for
+retail CFD; our test is M15 on retail-CFD indices — *inspired by*, not a
+replication of, the paper. Must clear the `STRATEGY_AUDIT` D1 cost anchor +
+Deflated-Sharpe / min-sample.
+
+**Algorithm (M15; pooled US500 + DE40 + UK100 as ONE strategy, never per-cell):**
+
+```
+1. At each session open, anchor to the session open price.
+2. Volatility band = open ± k_entry · ATR₁₄  (ATR₁₄ over closed M15 bars —
+   the engine's existing Wilder primitive; one shared vol primitive).
+3. First M15 bar of the session whose CLOSE breaches the band:
+     close > open + k_entry·ATR₁₄ → LONG
+     close < open − k_entry·ATR₁₄ → SHORT
+   At most one entry per session — first breach direction wins.
+4. No take-profit. Hold-to-close via the shared exit path:
+     hard stop → dynamic Chandelier trail → (no TP) → time-exit
+     → global 21:00 UTC session close.
+5. Dynamic Chandelier trail, recomputed every completed M15 bar:
+     LONG  stop = max_high_since_entry − k_trail · ATR₁₄(closed bars)
+     SHORT stop = min_low_since_entry  + k_trail · ATR₁₄(closed bars)
+   k_trail = 1.5. Anchored to the running extreme; MAY loosen when ATR
+   expands — the literature's vol-recomputed trail; the first non-ratchet
+   trail in the rule engine. See SYSTEM_DESIGN §3.7.1.
+6. Reset anchor / band on the next session-open bar.
+```
+
+**Key design choices:**
+- **Pooled, never per-cell.** US500 + DE40 + UK100 evaluated as one strategy;
+  per-instrument/session slicing is the §STRATEGY_AUDIT-5 / Deflated-Sharpe
+  thin-cell trap that killed ORB.
+- **M15, not 1–5 min.** M1/M5 is a hard non-goal (fixed per-trade cost
+  compounds at finer bars). Materially coarser than the cited paper — recorded
+  as a BR-caveat, not hidden.
+- **k_trail = 1.5 (= the existing trail multiple); k_entry pinned in the
+  architecture sub-design.** No new tunable beyond k_entry — minimising free
+  parameters is a Deflated-Sharpe requirement, not a preference.
+- **Dynamic Chandelier vs the ORB/momentum ratchet trail.** Deliberately *can
+  loosen* on vol expansion (closest to the BR4 vol-recomputed literature) —
+  the explicit reason the parity cost of a dynamic trail was accepted.
+  Drawdown trade-off acknowledged (BR2: this family's drawdown tolerance is
+  itself unvalidated).
+- **Both-sides parity.** The Chandelier trail is built into the shared
+  `strategy/signal_engine.py` and mirrored in the live monitor; backtest-only
+  was rejected as fidelity-false. SYSTEM_DESIGN §3.7.1 / §3.10.
+
+**Implementation:** TBD — `strategy/signal_engine.py` (shared module, both
+monitor + backtest); strategy YAML `name: intraday_continuation`,
+`resolution: M15`. Per-instrument session open from `backtest/sessions.py`
+(US500 14:30, DE40/UK100 08:00 UTC). Not yet coded; see SYSTEM_DESIGN §3.7.1
+and the 7-task plan in `docs/STRATEGY_AUDIT.md` Part 2.
 
 ---
 
@@ -536,4 +601,5 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 | QuantConnect Strategy Library | Open source implementations of canonical strategy families |
 | Capital.com API docs (demo) | Primary data source — confirm sentiment endpoint availability per instrument |
 | Zarattini & Aziz (2024) — *Opening Range Breakout* | Sharpe > 1.5 on US equity index futures at 15-min resolution; empirical basis for ORB (S5) |
+| Zarattini, Barbon & Aziz (2024) — *Beat the Market: An Effective Intraday Momentum Strategy* | SPY 2007–2024, Sharpe 1.33; empirical basis for S6 (D3/BR3) volatility-band intraday continuation |
 | Gao, Han, Li & Zhou (2018 JFE) — *ITSM* | Intraday technical signal model: first half-hour predicts last half-hour; R² 1.6–3.3% |

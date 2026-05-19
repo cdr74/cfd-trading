@@ -230,7 +230,7 @@ Rules are evaluated in priority order every `MONITOR_INTERVAL_SECONDS` (default 
 | Priority | Rule | Condition | Action |
 |----------|------|-----------|--------|
 | 1 | Hard stop | Price crosses `stop_loss.value` | CLOSE |
-| 2 | Trailing stop ratchet | momentum: distance = ATR₁₄@entry × 1.5 (fixed for trade), ratchet only; MR & ORB: disabled | ADJUST (ratchet only — never widens) |
+| 2 | Trailing stop | momentum: ATR₁₄@entry × 1.5 fixed, **ratchet-only**; intraday_continuation: **dynamic Chandelier** (ATR₁₄ recomputed each completed bar, *may loosen* — see §3.7.1); MR & ORB: disabled | ADJUST (per-strategy trail mode) |
 | 3 | Take profit | Price reaches `take_profit.initial_value` | CLOSE |
 | 4 | **Signal exit** | Deterministic signal reversal for the position's strategy (see below) | CLOSE |
 | 5 | Time exit | `session_end - close_minutes_before_session_end` | CLOSE |
@@ -286,6 +286,40 @@ deterministically re-seeded on restart.
 The time-exit rule reads "now" from an injectable parameter (default = real UTC clock,
 so live is unchanged). The backtest injects bar time — see §3.10. Same code path,
 same priority order, both contexts.
+
+#### 3.7.1 — Dynamic Chandelier trail (`intraday_continuation` / D3-BR3)
+
+> **Status:** architecture decided 2026-05-19 (strategy-debate Part 2 → Fork A,
+> sub-design concluded); **not yet implemented**. Full record:
+> `docs/STRATEGY_AUDIT.md` Part 2. The first deliberate change to the shared
+> exit path since the 2026-05-15 rebuild — accepted with eyes open: production
+> exit logic is modified before D3 has shown any edge.
+
+Per-bar volatility-recomputed trailing for the `intraday_continuation` strategy.
+The rule engine gains a **per-strategy trail mode** — this is the first
+non-ratchet trail; it *may move away from price* when volatility expands:
+
+- **Formula** (`k_trail = 1.5`, the existing trail multiple — no new tunable):
+  - LONG  `stop = max_high_since_entry − 1.5 · ATR₁₄(closed bars)`
+  - SHORT `stop = min_low_since_entry  + 1.5 · ATR₁₄(closed bars)`
+- **Completed bars only.** ATR₁₄ uses the engine's existing Wilder primitive
+  over *closed* M15 bars — never the in-progress bar or a live tick. This is
+  what keeps the bar-stepped backtest and the polled live monitor on identical
+  inputs.
+- **Stateless replay.** The stop is a pure function of the completed-bar series
+  plus entry — re-derived in full every evaluation, never accumulated as mutable
+  state. A missed or slow monitor poll cannot desync; live and backtest converge
+  by replay.
+- **Trigger logic unchanged.** Only the stop *level* changes from frozen to
+  recomputed. The existing intrabar-touch convention and the hard-stop→trail
+  activation gating are reused verbatim — no new activation threshold.
+- **One shared pure function.** The Chandelier computation lives in
+  `strategy/signal_engine.py` (the existing shared module imported by both
+  `monitor.py` and the backtest engine) — parity by construction, not
+  coincidence. The golden-trace parity test (`tests/unit/test_parity.py`) is
+  extended to assert the **full per-bar stop series**, not just the final exit.
+  A backtest-only dynamic trail was explicitly rejected as fidelity-false (it
+  reproduces the §3.10 defect that invalidated the prior audit).
 
 ### 3.8 Strategy Pluggability
 
@@ -343,6 +377,14 @@ The backtest passes the current bar's UTC timestamp; each simulated UTC day's
 ever carried overnight or over a weekend. A unit test asserts the live path and the
 backtest path return identical `(action, reason, stop)` on shared fixtures — the
 anti-drift guarantee.
+
+**Post-rebuild change — dynamic Chandelier trail (decided 2026-05-19, pre-code).**
+The one deliberate addition to this shared exit path since the rebuild: the
+`intraday_continuation` strategy's per-bar volatility-recomputed trail (§3.7.1).
+It is built into the shared `signal_engine` and mirrored in the live monitor; the
+parity test is extended to assert the full per-bar stop series. Backtest-only was
+rejected as fidelity-false. System remains pre-pivot — no strategy is
+deploy-ready; see `docs/STRATEGY_AUDIT.md` Part 2.
 
 OHLC data comes from MetaTrader 5 on the Capital.com demo account. The
 `BACKTEST_MODE=true` env var blocks all live API calls at the `CapitalClient` level
