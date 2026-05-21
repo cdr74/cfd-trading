@@ -24,3 +24,8 @@ build/
 
 # OS
 .DS_Store
+
+# Executed analysis notebooks — regenerable from the parquet via the
+# `build_*_inspection_nb.py` scripts (≤11 MB each; same convention
+# as the deleted analysis/audit_archive/trade_inspection.ipynb)
+audit/*.ipynb

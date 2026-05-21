@@ -14,7 +14,8 @@ risk:
     max_pct: 5.0
   trailing_stop:
     enabled: true
-    atr_multiplier: 1.5        # distance = ATR14@entry × 1.5, fixed for the trade, ratchet-only
+    mode: fixed_atr            # distance = ATR14@entry × atr_multiplier, fixed for the trade, ratchet-only
+    atr_multiplier: 1.5
     update_interval_min: 1
   take_profit:
     dynamic: true

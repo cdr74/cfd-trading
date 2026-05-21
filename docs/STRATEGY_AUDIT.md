@@ -135,29 +135,30 @@ traditional retail-CFD mechanical edge is winnable here at all → Part 2.
 
 ---
 
-## Part 2 — Strategy Debate (NEXT PHASE — open agenda)
+## Part 2 — Strategy Debate (D3 closed 2026-05-21; D1/D2/D4 open)
 
-The pivot. No new strategy is coded before this debate concludes (discuss
-before implementing). Threads:
+The pivot. Fork A (D3/BR3 — Zarattini-inspired volatility-band intraday
+continuation) was tested and **killed 2026-05-21** (see "Task #7 — Run +
+verdict" below). The remaining threads stay open as the next-phase agenda.
+Discuss before implementing; no new strategy is coded before the relevant
+thread concludes.
 
 - **D1 — Is a traditional mechanical edge winnable on retail CFD at all?**
   Decide explicitly: accept that the cost/execution environment is the binding
   constraint, and what (if anything) changes the premise (different broker /
-  instrument class / non-CFD venue / passive-fill capability).
+  instrument class / non-CFD venue / passive-fill capability). **Status:**
+  open; D3's failure reinforces the question but doesn't answer it.
 - **D2 — News-proximity / event-driven (was audit A4).** Post-news drift as a
   distinct strategy class: ForexFactory historical calendar, timezone
   validation, surprise-threshold entries, hours-not-seconds horizon. Was
-  deferred as low-priority for the dropped strategies; now a first-class
-  debate topic.
-- **D3 — Literature-led direction.** Volatility-conditioned index intraday
-  continuation; feasibility under our costs; the research backlog (ORB
-  volatility-regime conditioning; ORB stop-design cross-check; a Zarattini-
-  style intraday-momentum variant on indices; dynamic vs fixed-at-entry
-  trailing). All carry the BR-caveat: futures/ETF results, not re-costed for
-  retail CFD.
+  deferred behind D3; **now unblocked but unrun.**
+- **D3 — Literature-led direction (Zarattini-inspired volatility-band
+  intraday continuation, BR3 variant).** **CLOSED 2026-05-21 — KILLED on
+  pre-registered OOS gates.** Full record: "Task #7 — Run + verdict" below.
 - **D4 — Claude co-pilot, re-scoped (former Phase E).** With no validated
   mechanical base, redefine what signals a co-pilot would review and whether
-  that role is still meaningful.
+  that role is still meaningful. **Status:** open and now more salient — if
+  no mechanical thread (D1/D2) clears, D4 is the remaining deploy claim.
 - **D5 — AI/ML & sub-30-min/multi-year horizons:** explicitly out unless D1
   changes the premise (M1/M5 primary TF and LLM-as-signal were already
   rejected; Carver's viable MR bands need passive-fill or multi-year holds).
@@ -209,9 +210,10 @@ calendar with actual + consensus forecast over 2023-05→2026-05 × the
   off the table). This is a Zarattini-*inspired* test, not a replication — the
   BR-caveat compounds (un-re-costed for CFD **and** coarser TF). Label results
   accordingly.
-- **Entry:** first session breach of `open ± k·ATR₁₄` (σ from the engine's
-  existing ATR₁₄ primitive — one volatility primitive, fidelity-clean), direction
-  = breach side. `k` to be pinned in the architecture sub-design.
+- **Entry:** first session breach of `open ± k_entry·ATR₁₄` (σ from the
+  engine's existing ATR₁₄ primitive — one volatility primitive,
+  fidelity-clean), direction = breach side. **k_entry = 1.0** pinned
+  2026-05-21 (see Progress).
 - **Exit:** hard stop → **dynamic, bar-recomputed ATR trailing** → no TP →
   time-exit → global 21:00 UTC session close ("hold to close" = trail +
   session-close, no fixed TP — faithful to Zarattini's trail/close design).
@@ -244,9 +246,276 @@ recomputed every completed M15 bar from closed bars only; stateless-replay;
 *may loosen* on vol expansion (literature-faithful); trigger logic unchanged;
 one shared pure function + golden-trace parity test extended to the full
 per-bar stop series. (b) Design docs updated: `SYSTEM_DESIGN.md` §3.7.1 +
-§3.10, `CFD_STRATEGY_CATALOG.md` §14 (S6) + references. Next: (c) implement
-both sides + extend parity test + unit tests (tasks #3–5), (d) pre-register
-DSR (#6), then run (#7).
+§3.10, `CFD_STRATEGY_CATALOG.md` §14 (S6) + references.
+
+**k_entry decision (2026-05-21).** Pinned **k_entry = 1.0** (single value,
+no sweep — zero new free parameter beyond the existing trail multiple).
+Forks considered: 0.5 (noise-dominant; ≈ "trade open direction"), **1.0**
+(Zarattini-family heuristic translated onto ATR₁₄(M15); balanced N), 1.5
+(stronger signal, fewer trades, still safe for DSR), 2.0 (pooled N ≈ 600
+borderline for DSR with bootstrap CI + OOS split). 1.0 chosen as the
+balance point: largest N consistent with a real volatility filter, no
+parameter search ⇒ no DSR multiplicity penalty for entry tuning. Recorded
+in `CFD_STRATEGY_CATALOG.md` §14.
+
+**Implementation done (2026-05-21) — tasks #3-5.**
+- `IntradayContinuationSignalState` + `chandelier_stop()` pure function in
+  `strategy/signal_engine.py` (shared module — engine + monitor parity by
+  construction).
+- `evaluate_position` gained `current_atr` kwarg + `trailing_stop.mode`
+  dispatch (`fixed_atr` | `dynamic_chandelier` | `fixed_pct`); momentum.yaml
+  set to `fixed_atr` explicitly. SYSTEM_DESIGN §3.7.1 carries the new
+  dispatch table.
+- `monitor/monitor.py` registers the class, wires per-epic session_open
+  from `backtest/sessions.py`, and passes `current_atr = signal_state.atr`
+  each cycle.
+- `backtest/engine.py` registers the strategy, passes per-epic session
+  kwargs, captures `Trade.stop_history` per in-trade bar, and skips
+  evaluation on the entry bar (semantic alignment with live monitor — a
+  latent asymmetry the Chandelier parity check surfaced).
+- Tests: 15 new in `test_intraday_continuation.py` + 2 new in
+  `test_parity.py::TestChandelierTrailParity` (engine ≡ monitor per-bar
+  AND engine ≡ closed-form `chandelier_stop()` formula). Full suite: **346
+  unit tests pass** (329 prior + 17 new). No regressions.
+
+#### Task #6 — DSR pre-registration (locked 2026-05-21, pre-run)
+
+**This section is the pre-registration.** It freezes the methodology, the
+numeric thresholds, AND the kill protocol BEFORE the D3 backtest is run.
+No post-hoc adjustment. If a later finding requires methodology change, the
+existing run is invalidated and re-pre-registration is needed.
+
+Authority: extends [[deflated-sharpe-min-sample]] (the standing gate) +
+§4 + §5 ORB precedent. The four open methodology forks were debated
+2026-05-21; chosen options are recorded here.
+
+**1. Data window & split.**
+- **Window:** 2023-05-21 → 2026-05-21 (3 yrs; same re-baseline as the audit,
+  `analysis/audit_archive/`).
+- **Universe:** pooled **US500 + DE40**. Bars: M15 (the strategy
+  resolution; one shared vol primitive — ATR₁₄ Wilder on closed bars).
+- **OOS split:** **67/33 by calendar time. Boundary: 2025-01-21.** IS =
+  2023-05-21 → 2025-01-21 (≈20 mo); OOS = 2025-01-21 → 2026-05-21 (≈16 mo).
+  Matches §5 ORB DSR re-evaluation precedent. Expected pooled N ≈ 1,100
+  over the full window → IS ≈ 730, OOS ≈ 370. Both well above the
+  100-trade min-sample floor (Bailey/LdP). (Lower than the original 1,700
+  estimate because UK100 has been dropped — see amendment note below.)
+
+> **Pre-run amendment (2026-05-21, pre-run).** The originally locked
+> universe was pooled US500+DE40+UK100. Pre-run data audit found UK100 M15
+> depth is structurally limited (~10 months, 2025-07-09 → 2026-05-14) by
+> MT5 / Capital.com demo history — same root cause as §5 ORB's "UK100-London
+> has zero train trades (all data 2025+ — un-OOS-testable)". UK100 cannot
+> contribute to the IS window (entirely after the IS boundary). To preserve
+> the IS=OOS-universe symmetry that the DSR / kill-criterion comparison
+> requires, **UK100 is dropped from the run.** The pooled universe is
+> US500 + DE40 only. Pooled cost re-derives (D1 anchor: US500 0.89, DE40
+> 0.49 bps; N-weighted at run-time, expected ≈ 0.70 bps → 3× hurdle ≈
+> 2.10 bps). K = 121 (the trial count is per-strategy, unchanged by the
+> universe reduction). The amendment is recorded BEFORE the run; no result
+> is invalidated because none exists yet. The pre-pivot intent — "pooled
+> indices, never per-cell" — is preserved; the pool is just smaller than
+> originally hoped.
+
+**2. The metric & the gates (each computed separately in IS and in OOS).**
+- **Per-trade Sharpe** SR̂ = mean(net_pnl_pts) / std(net_pnl_pts) where
+  net_pnl_pts is the spread-cost-included PnL per trade (the engine's
+  fidelity-true cost-included number; the `pnl_points` field on `Trade`).
+- **Deflated Sharpe** DSR P(SR > SR₀) per Bailey/LdP. Trials count K is
+  the audit's prior count incremented by 1 for D3 (the standing-gate
+  convention): **K = 121.** SR₀ recomputed from the same cross-cell Sharpe
+  dispersion as §5 (σ̂ ≈ 0.282/√(2 ln 120) ≈ 0.090 implied) → **SR₀ ≈ 0.283
+  for K=121** (Bailey approximation; one decimal place's worth of drift
+  from the ORB run's 0.282 — within the rounding of the underlying
+  estimator). The script that recomputes SR₀ from the audit archive is the
+  source of truth at run-time; this number is the expected value.
+- **Bootstrap 95% CI** on SR̂ via **moving-block bootstrap, block length
+  20 trades, 10,000 resamples.** Block length ≈ 1 week of pooled signals;
+  matches §5 precedent.
+- **3× cost gate:** **pooled N-weighted average cost** across the
+  in-scope indices (per-trade `spread_at_entry` × 2; the same cost the
+  engine subtracts at entry+exit). D1 anchor (per-index, the in-scope two
+  after the UK100 amendment): US500 0.89, DE40 0.49 bps/trade →
+  pooled-N-weighted estimate ≈ 0.70 bps. **Hurdle: net/trade ≥ 3 × pooled
+  cost ≈ 2.10 bps.** Pooled cost AND pooled net are computed from realized
+  N at run-time; threshold is 3× the realized pooled cost.
+- **Min-sample:** pooled N (IS and OOS each) must be ≥ 100 trades.
+
+**3. Pass/Fail per window (IS, OOS):**
+| Gate | Pass condition |
+|---|---|
+| Min-sample | pooled N ≥ 100 |
+| DSR | P(SR̂ > SR₀) ≥ 0.95 |
+| Bootstrap CI | 95% CI lower bound > 0 |
+| Cost gate | net/trade ≥ 3 × pooled cost (≈ 2.26 bps) |
+
+**4. Kill-criterion (pre-committed, with mandatory introspection).**
+**D3 dies** if **OOS fails ANY of the four gates** — the strictest
+combination, mirroring the Phase A kill that closed the audit. **BUT**
+between the result and the kill declaration there is a **non-optional
+introspection step**, motivated by the deleted prior audit (the time-exit
+defect that invalidated every previous result before being caught):
+
+> Before declaring D3 dead — or alive — we must inspect for implementation
+> errors. The kill protocol is:
+>
+> 1. Run the backtest.
+> 2. **Pre-kill introspection (mandatory).** Visually and statistically
+>    inspect at minimum:
+>    - Equity curve (pooled and per-index)
+>    - PnL distribution (trade histogram; tails)
+>    - Trade sample — at least 20 random trades, manually verified against
+>      the bar series (entry timing, stop placement, trail behaviour,
+>      exit reason)
+>    - Per-instrument N + win-rate + cost-net split
+>    - Drawdown periods (any single trade or week dominating the result?)
+>    - **Parity test passes on the run data** (re-run
+>      `tests/unit/test_parity.py` after the backtest if any engine code
+>      changed during the run)
+>    - Sanity check vs the literature expected range (Zarattini SPY
+>      reported Sharpe 1.33 at 1-min, *un-re-costed*; on M15 retail CFD
+>      we expect substantially lower realized Sharpe — anything wildly
+>      outside say 0.05–1.5 needs explanation)
+> 3. **If introspection finds a bug:** fix it → re-run → re-introspect.
+>    The pre-fix run is invalidated. No partial kill on bugged data.
+> 4. **If introspection clears AND OOS fails ≥1 gate:** D3 is dead.
+>    Record findings in this doc; proceed to fallback (Forks B/C/D
+>    per the 2026-05-19 decisions).
+> 5. **If introspection clears AND OOS clears all 4 gates:** D3 is a
+>    candidate edge. Proceed to walk-forward / MC robustness (the
+>    audit's §3 future-test deferred items) and live MTRL before any
+>    deploy claim.
+
+This introspection step is the lesson from the deleted prior audit. Cost:
+a few hours of manual review per run. Value: the only protection against
+silently shipping a result driven by an engine bug.
+
+**5. What is NOT in this pre-registration (and stays out).**
+- Walk-forward optimization. WFO needs something to optimize; D3 has zero
+  free parameters in-scope (k_entry, k_trail, session_open all pre-pinned).
+  Future-defer per §3.
+- Per-cell slicing. The pooled metric IS the metric. Per-instrument
+  numbers are reported for diagnosis only; they do not gate.
+- Live deploy. No D3 demo or live trading until D3 clears OOS AND
+  walk-forward AND MTRL — a multi-step gate, the first step of which is
+  this run.
+
+**6. Reproducibility.**
+- Backtest entry point: `analysis/audit_archive/` re-baseline scripts +
+  the rebuilt engine (`backtest/engine.py`) with `intraday_continuation`
+  registered.
+- All inputs (data window, k_entry, k_trail, OOS boundary, K, SR₀,
+  bootstrap block, gate thresholds) frozen in this section.
+- Output: a `audit/d3_run_<date>.md` report linked from this section,
+  containing the four gates × two windows table, the introspection
+  findings, and the kill/keep decision per §4 above.
+
+Next: (e) run (#7) — only after this pre-registration is reviewed by the
+user (1 final eyes-on before locking).
+
+#### Task #7 — Run + verdict (2026-05-21): D3 KILLED
+
+**Run.** Pre-registered backtest executed 2026-05-21. Universe pooled
+US500+DE40 (UK100 dropped per the amendment); 2023-05-21 → 2026-05-21 at
+M15; 1,468 trades total. Artefacts:
+- `audit/d3_run_2026-05-21.parquet` — trades log
+- `audit/d3_analyze.py` — DSR + bootstrap + cost-gate + diagnostics
+- `audit/d3_run_2026-05-21.md` — gate results + introspection findings
+- `audit/d3_trade_inspection.ipynb` — 120 chart visual deep-dive
+  (`audit/build_d3_inspection_nb.py` regenerates)
+
+**Four gates × two windows:**
+
+| Window | N | SR̂ | DSR P | 95% CI (block 20, 10k) | Net (bps) | Hurdle (bps) | Verdict |
+|---|---:|---:|---:|---|---:|---:|---|
+| IS  (2023-05 → 2025-01) | 786 | −0.007 | 0.000 | [−0.072, +0.071] | **−0.578** | 2.389 | min ✓, DSR ✗, CI ✗, cost ✗ |
+| OOS (2025-01 → 2026-05) | 674 | +0.054 | 0.000 | [−0.020, +0.117] | +1.302 | 1.814 | min ✓, DSR ✗, CI ✗, cost ✗ |
+
+OOS fails 3 of 4 gates. Per the pre-registered kill criterion: **kill**.
+
+**Pre-kill introspection complete (2026-05-21).** Per the mandatory
+introspection step, the run was reviewed before applying the kill rule.
+Findings:
+
+- **Trail behaviour confirmed correct.** Per-bar parity test
+  (`tests/unit/test_parity.py::TestChandelierTrailParity`) passed on the
+  run data: engine ≡ live monitor per-bar AND engine ≡ closed-form
+  `chandelier_stop()` formula. No implementation bug detected.
+- **Entry distribution sane.** US500 entries concentrate in 14:00-15:00
+  UTC (83% in first hour after session open); DE40 in 08:00-09:00 UTC
+  (89% in first 2 hours). Strategy is firing on the spec-intended
+  early-session breach, not drifting elsewhere.
+- **One bookkeeping bug found and fixed in the analysis (not the
+  engine):** the `d3_analyze.py` cost calc initially doubled
+  `spread_at_entry` (the engine already deducts full round-trip in
+  `pnl_points`). After fix, realized pooled cost (≈0.6-0.8 bps) and 3×
+  hurdle (≈1.8-2.4 bps) align with the audit's D1 anchor — confirming
+  the run's cost model.
+- **Decisive smell — the exit-reason asymmetry:**
+
+  | reason | count | share | mean net (bps) | sum net (bps) |
+  |---|---:|---:|---:|---:|
+  | Hard stop (Chandelier trail) | 1,411 | 96.6% | **−1.44** | −2,027 |
+  | Session close (no bar at threshold) | 49 | 3.4% | **+50.0** | +2,450 |
+
+  The strategy's positive PnL share is **entirely the rare 3.4%** of
+  trades that exit via a day-rollover fallback (the engine's "no bar
+  fell in that day's close window" hack, closing at the prior bar's
+  close). Chandelier-trail exits LOSE on aggregate. The trail is
+  structurally acting as a profit-cap on the 96.6%, and the win side
+  comes only from trades the trail FAILED to catch. This is consistent
+  whether the 3.4% are realistic fills or a backtest-fill artifact —
+  either way, the trail mechanism is not the source of any edge.
+
+**Kill verdict (2026-05-21):**
+
+**D3/BR3 (intraday_continuation) is dead at the M15 / retail-CFD level.**
+The signal+trail family fails OOS on three of four pre-registered gates
+by structural margin (SR̂ ≈ 0 in IS; would need ~5× to clear DSR). The
+audit's D1 cost-anchor prediction is confirmed for the literature-led
+best-evidenced family. Adding a hold-to-close variant (drop the trail)
+was considered as a single defensible second test, but was rejected by
+the user: (a) it would be another trial against the same data window
+(DSR multiplicity cost), (b) the strategy still needs to clear the same
+gates, and (c) the broader audit conclusion — retail-CFD mechanical
+intraday edge is structurally hostile — is more strongly reinforced by
+moving to the next-phase forks than by chasing a narrower variant of an
+already-failed family. **No further D3 variants.**
+
+**Status of D3 next-phase forks (per the 2026-05-19 decisions):**
+- **Fork A (horizon-attack, in CFD) — CLOSED.** D3/BR3 was the
+  literature-led test. It failed; the family is killed on this venue.
+- **Fork B (different horizon — multi-day / swing in CFD) — open agenda.**
+- **Fork C (lower-cost venue / asset class — e.g. crypto-native exchange,
+  futures, FX ECN) — open agenda.**
+- **Fork D (Claude-as-co-pilot only, no new mechanical signal) — open
+  agenda.** Aligned with [[project-claude-role]]: Claude reviews
+  pre-calculated signals; if no mechanical edge survives the audit, the
+  system's deploy claim shrinks to "interactive trading assistant"
+  rather than "autonomous mechanical edge".
+
+**Transferable learnings from D3 (extending §8):**
+1. **Pooled "never per-cell" is the right discipline** but raises the
+   bar: an instrument with a different data window (UK100) cannot be
+   silently included in a pooled IS/OOS comparison. The pre-run
+   amendment to drop UK100 was structurally forced; pre-registration
+   only protects against post-hoc bias if it acknowledges data limits.
+2. **Per-bar parity is worth the engineering cost.** Surfaced a latent
+   engine-vs-monitor asymmetry on the entry bar that prior fixtures had
+   masked. The fix shipped as part of D3 implementation; the trail-mode
+   dispatch infrastructure (`trailing_stop.mode`, `current_atr` kwarg)
+   is reusable by future strategies (still in production code).
+3. **The Chandelier-as-profit-cap pattern** — 96.6% trail-exits lose,
+   3.4% non-trail exits win huge — is a *general* warning sign for any
+   future strategy that pairs a continuation signal with a tight
+   volatility trail on a friction-heavy venue. Tight trail + small edge
+   + spread tax = trail catches the wiggle and crystallises the cost.
+4. **Pre-kill introspection caught the cost-calc bug** in the analysis
+   script. The protocol's value is empirical, not theoretical.
+5. **Methodology held.** No parameter mining, no post-hoc cell rescue,
+   no "let's just try k_trail=2.5" detour. The kill verdict applies to
+   a single pre-registered run with all parameters frozen — the cleanest
+   possible kill record.
 
 ### D1 anchor — the cost reality (quantified)
 

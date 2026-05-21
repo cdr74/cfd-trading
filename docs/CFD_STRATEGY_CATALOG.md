@@ -529,11 +529,21 @@ S4 has no YAML entry — sentiment overlay logic is embedded in S1 and S3 prompt
 
 ## 14. S6 — Volatility-Band Intraday Continuation (Zarattini-inspired, D3/BR3)
 
-**Status:** algorithm decided 2026-05-19 (strategy debate Part 2 → Fork A);
-**not yet implemented**. Full decision record + the pre-registered
-DSR/min-sample plan: `docs/STRATEGY_AUDIT.md` Part 2. This is the post-audit
-pivot's first strategy — no deploy claim until it clears the pre-committed
-kill-criterion.
+**Status: KILLED 2026-05-21** (Fork A closed — full record in
+`docs/STRATEGY_AUDIT.md` Part 2 → "Task #7 — Run + verdict"). Algorithm was
+decided 2026-05-19; implemented + tested + pre-registered + run 2026-05-21.
+The pre-registered backtest (pooled US500+DE40, M15, 2023-05 → 2026-05,
+N=1,460) FAILED 3 of 4 OOS gates: DSR P=0.000 (SR̂ ≈ 0), 95% CI straddles 0,
+net 1.30 bps below the 1.81 bps hurdle. Decisive smell: 96.6% of trades exit
+via the Chandelier trail and LOSE on average; the strategy's positive PnL
+share is entirely the rare 3.4% of trades that hit the day-rollover fallback
+exit. **Do not silently revive.** Run artefacts preserved in `audit/`.
+
+The code (`config/strategies/intraday_continuation.yaml` / `.md`,
+`IntradayContinuationSignalState`, `chandelier_stop()`, `trailing_stop.mode:
+dynamic_chandelier`) remains in the tree as historical record + reusable
+trail-mode infrastructure (the dispatch pattern can be used by future
+strategies that need a per-bar volatility-recomputed trail).
 
 **Research basis:** Zarattini, Barbon & Aziz (2024) — SPY 2007–2024, ~19.6 %
 ann., Sharpe 1.33. Structural edge: an intraday breach of a volatility-scaled
@@ -547,11 +557,12 @@ Deflated-Sharpe / min-sample.
 
 ```
 1. At each session open, anchor to the session open price.
-2. Volatility band = open ± k_entry · ATR₁₄  (ATR₁₄ over closed M15 bars —
-   the engine's existing Wilder primitive; one shared vol primitive).
+2. Volatility band = open ± k_entry · ATR₁₄  (k_entry = 1.0; ATR₁₄ over
+   closed M15 bars — the engine's existing Wilder primitive; one shared
+   vol primitive).
 3. First M15 bar of the session whose CLOSE breaches the band:
-     close > open + k_entry·ATR₁₄ → LONG
-     close < open − k_entry·ATR₁₄ → SHORT
+     close > open + 1.0·ATR₁₄ → LONG
+     close < open − 1.0·ATR₁₄ → SHORT
    At most one entry per session — first breach direction wins.
 4. No take-profit. Hold-to-close via the shared exit path:
      hard stop → dynamic Chandelier trail → (no TP) → time-exit
@@ -572,9 +583,11 @@ Deflated-Sharpe / min-sample.
 - **M15, not 1–5 min.** M1/M5 is a hard non-goal (fixed per-trade cost
   compounds at finer bars). Materially coarser than the cited paper — recorded
   as a BR-caveat, not hidden.
-- **k_trail = 1.5 (= the existing trail multiple); k_entry pinned in the
-  architecture sub-design.** No new tunable beyond k_entry — minimising free
-  parameters is a Deflated-Sharpe requirement, not a preference.
+- **k_entry = 1.0, k_trail = 1.5 (= the existing trail multiple).** Both
+  pinned pre-run, no sweep — minimising free parameters is a Deflated-Sharpe
+  requirement, not a preference. k_entry pinned 2026-05-21 from the
+  architecture sub-design (debate record: `docs/STRATEGY_AUDIT.md` Part 2,
+  k_entry decision).
 - **Dynamic Chandelier vs the ORB/momentum ratchet trail.** Deliberately *can
   loosen* on vol expansion (closest to the BR4 vol-recomputed literature) —
   the explicit reason the parity cost of a dynamic trail was accepted.
@@ -584,11 +597,18 @@ Deflated-Sharpe / min-sample.
   `strategy/signal_engine.py` and mirrored in the live monitor; backtest-only
   was rejected as fidelity-false. SYSTEM_DESIGN §3.7.1 / §3.10.
 
-**Implementation:** TBD — `strategy/signal_engine.py` (shared module, both
-monitor + backtest); strategy YAML `name: intraday_continuation`,
-`resolution: M15`. Per-instrument session open from `backtest/sessions.py`
-(US500 14:30, DE40/UK100 08:00 UTC). Not yet coded; see SYSTEM_DESIGN §3.7.1
-and the 7-task plan in `docs/STRATEGY_AUDIT.md` Part 2.
+**Implementation (2026-05-21, retained as historical record):**
+`IntradayContinuationSignalState` and `chandelier_stop()` pure function in
+`strategy/signal_engine.py` (shared module — both `monitor/monitor.py` and
+`backtest/engine.py` register the class and the trail dispatch reads the
+`trailing_stop.mode: dynamic_chandelier` YAML field; see SYSTEM_DESIGN §3.7.1).
+Per-instrument session open wired from `backtest/sessions.py`. Tests:
+`tests/unit/test_intraday_continuation.py` (15 tests — entry rule, session
+reset, `chandelier_stop` formula) +
+`tests/unit/test_parity.py::TestChandelierTrailParity` (per-bar `stop_history`
+parity engine ≡ monitor, plus engine ≡ closed-form `chandelier_stop()`).
+The implementation is correct and tested; the strategy was killed on its
+out-of-sample performance, not on a code defect. See STRATEGY_AUDIT Part 2.
 
 ---
 

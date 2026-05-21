@@ -230,7 +230,7 @@ Rules are evaluated in priority order every `MONITOR_INTERVAL_SECONDS` (default 
 | Priority | Rule | Condition | Action |
 |----------|------|-----------|--------|
 | 1 | Hard stop | Price crosses `stop_loss.value` | CLOSE |
-| 2 | Trailing stop | momentum: ATR₁₄@entry × 1.5 fixed, **ratchet-only**; intraday_continuation: **dynamic Chandelier** (ATR₁₄ recomputed each completed bar, *may loosen* — see §3.7.1); MR & ORB: disabled | ADJUST (per-strategy trail mode) |
+| 2 | Trailing stop | momentum: ATR₁₄@entry × 1.5 fixed, **ratchet-only**; intraday_continuation: dynamic Chandelier (KILLED 2026-05-21 — code retained as historical record + reusable trail-mode infrastructure; see §3.7.1); MR & ORB: disabled | ADJUST (per-strategy trail mode) |
 | 3 | Take profit | Price reaches `take_profit.initial_value` | CLOSE |
 | 4 | **Signal exit** | Deterministic signal reversal for the position's strategy (see below) | CLOSE |
 | 5 | Time exit | `session_end - close_minutes_before_session_end` | CLOSE |
@@ -278,10 +278,16 @@ deterministically re-seeded on restart.
   this is the same shared `signal_engine` the backtest uses, the value is
   bit-identical to the backtest's `entry_atr` — exact parity, zero extra hot-path
   cost (it is the already-required backfill replay), restart-deterministic.
-- **O3 — only momentum & mean_reversion get live signal state.** ORB's
-  `check_exit()` is always `None` and ORB trailing is disabled, so the monitor
-  passes `signal_state=None` for ORB and skips warm-up/session wiring for it; ORB
-  exits via the price/time rules (hard stop / TP / time-exit) exactly as before.
+- **O3 — momentum and mean_reversion get live signal state**; ORB's
+  `check_exit()` is always `None` and ORB trailing is disabled, so the
+  monitor passes `signal_state=None` for ORB and skips warm-up/session
+  wiring for it (ORB exits via the price/time rules — hard stop / TP /
+  time-exit — exactly as before). `intraday_continuation` is also
+  registered in `_SIGNAL_CLS` (the dynamic Chandelier trail needs
+  `current_atr` recomputed each cycle), but the strategy was killed
+  2026-05-21 on OOS performance — the wiring stays in place as the
+  reusable trail-mode infrastructure; the strategy itself should not be
+  scheduled.
 
 The time-exit rule reads "now" from an injectable parameter (default = real UTC clock,
 so live is unchanged). The backtest injects bar time — see §3.10. Same code path,
@@ -289,11 +295,35 @@ same priority order, both contexts.
 
 #### 3.7.1 — Dynamic Chandelier trail (`intraday_continuation` / D3-BR3)
 
-> **Status:** architecture decided 2026-05-19 (strategy-debate Part 2 → Fork A,
-> sub-design concluded); **not yet implemented**. Full record:
-> `docs/STRATEGY_AUDIT.md` Part 2. The first deliberate change to the shared
-> exit path since the 2026-05-15 rebuild — accepted with eyes open: production
-> exit logic is modified before D3 has shown any edge.
+> **Status: KILLED 2026-05-21.** Architecture decided 2026-05-19; implemented
+> + tested 2026-05-21; pre-registered backtest run + introspected + killed
+> on the same day. Strategy failed 3 of 4 OOS gates (DSR P=0.000, 95% CI
+> straddles 0, net 1.30 bps below 1.81 bps hurdle). Full record:
+> `docs/STRATEGY_AUDIT.md` Part 2 → "Task #7 — Run + verdict".
+>
+> **Code retained as historical record + reusable infrastructure.** The
+> `IntradayContinuationSignalState`, `chandelier_stop()` pure function, the
+> `trailing_stop.mode: dynamic_chandelier` dispatch, `current_atr` kwarg, and
+> the per-bar parity test ARE STILL IN THE TREE. They were implemented
+> correctly (the strategy was killed on OOS performance, not a code defect)
+> and the trail-mode dispatch + `current_atr` plumbing are reusable for any
+> future strategy that wants a per-bar volatility-recomputed trail. Do not
+> revive `intraday_continuation` itself without an explicit new thesis that
+> addresses the cost/horizon findings (§3, §8 transferable learnings).
+
+**Trail dispatch (`trailing_stop.mode` YAML field).** `evaluate_position`
+branches on the strategy YAML's `risk.trailing_stop.mode`:
+
+| mode | Distance | Ratchet? | Used by |
+|---|---|---|---|
+| `fixed_atr` | `atr_multiplier × entry_atr` (fixed at entry) | Yes — never widens | `momentum` |
+| `dynamic_chandelier` | `atr_multiplier × current_atr` (recomputed each bar) from running extreme | **No — may loosen on vol expansion** | `intraday_continuation` |
+| `fixed_pct` | `min_distance_pct × bid/ask` | Yes — never widens | (legacy / unused) |
+| _absent_ | Defaults to `fixed_atr` if `atr_multiplier` is set, else `fixed_pct` (back-compat) | — | — |
+
+`evaluate_position` accepts both `entry_atr` (fixed_atr) and `current_atr`
+(dynamic_chandelier) — the engine + monitor pass both, and the mode dispatch
+selects which one drives the distance.
 
 Per-bar volatility-recomputed trailing for the `intraday_continuation` strategy.
 The rule engine gains a **per-strategy trail mode** — this is the first
@@ -378,13 +408,29 @@ ever carried overnight or over a weekend. A unit test asserts the live path and 
 backtest path return identical `(action, reason, stop)` on shared fixtures — the
 anti-drift guarantee.
 
-**Post-rebuild change — dynamic Chandelier trail (decided 2026-05-19, pre-code).**
-The one deliberate addition to this shared exit path since the rebuild: the
-`intraday_continuation` strategy's per-bar volatility-recomputed trail (§3.7.1).
-It is built into the shared `signal_engine` and mirrored in the live monitor; the
-parity test is extended to assert the full per-bar stop series. Backtest-only was
-rejected as fidelity-false. System remains pre-pivot — no strategy is
-deploy-ready; see `docs/STRATEGY_AUDIT.md` Part 2.
+**Post-rebuild change — dynamic Chandelier trail (decided 2026-05-19,
+implemented + tested + KILLED 2026-05-21).** The one deliberate addition to
+this shared exit path since the rebuild: the `intraday_continuation`
+strategy's per-bar volatility-recomputed trail (§3.7.1). Built into the
+shared `signal_engine`, mirrored in the live monitor; parity test asserts
+the **full per-bar `stop_history` series** engine ≡ monitor AND engine ≡
+closed-form `chandelier_stop()` formula
+(`tests/unit/test_parity.py::TestChandelierTrailParity`). Backtest-only was
+rejected as fidelity-false. The infrastructure (trail-mode dispatch,
+`current_atr` plumbing, the parity test) remains in code as reusable; the
+strategy itself was killed on OOS performance (`STRATEGY_AUDIT.md` Part 2
+→ Task #7). System remains pre-pivot — no strategy is deploy-ready.
+
+**Entry-bar evaluation skip (semantics alignment, 2026-05-21).** The engine
+skips `evaluate_position` on the entry bar (the first bar where `open_trade`
+exists, tracked positionally via `last_in_trade_bar is None`). This matches
+live monitor semantics: a live cycle sees a position only on the cycle AFTER
+its creation — never on the same cycle. Prior engine behaviour ran evaluation
+on the entry bar; existing fixtures happened to not trigger an action there,
+masking the asymmetry. The Chandelier trail's per-bar parity surfaced it and
+demanded the fix. All other strategies are behaviour-preserving (no fixture
+triggered an action on the entry bar; the change made the latent asymmetry
+explicit, not the behaviour wrong).
 
 OHLC data comes from MetaTrader 5 on the Capital.com demo account. The
 `BACKTEST_MODE=true` env var blocks all live API calls at the `CapitalClient` level
@@ -404,9 +450,10 @@ cfd-trading/
 │   └── strategies/
 │       ├── _base.md                 # proposal schema + hard rules for Claude Code context
 │       ├── scan.md                  # market scan prompt
-│       ├── momentum.yaml / .md      # S1 — trend-following (resolution: M30)
+│       ├── momentum.yaml / .md      # S1 — trend-following (resolution: M30; trailing_stop.mode: fixed_atr)
 │       ├── mean_reversion.yaml / .md  # S2 — range-bound (resolution: M1)
-│       └── orb.yaml / .md           # S5 — Opening Range Breakout (resolution: M15)
+│       ├── orb.yaml / .md           # S5 — Opening Range Breakout (resolution: M15)
+│       └── intraday_continuation.yaml / .md   # S6 — KILLED 2026-05-21 (D3/BR3; resolution: M15; trailing_stop.mode: dynamic_chandelier — retained as historical record)
 ├── data/                            # gitignored
 │   ├── trading.db
 │   └── audit.jsonl
