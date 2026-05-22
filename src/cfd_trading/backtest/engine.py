@@ -8,10 +8,12 @@ Prices: local SQLite ohlc_bars — no Capital.com API calls
 import datetime as _dt
 from dataclasses import dataclass, field
 
+from cfd_trading.backtest.sessions import session_open_utc
 from cfd_trading.monitor.monitor import evaluate_position
 from cfd_trading.storage.repository import OHLCBar
 from cfd_trading.strategy.signal_engine import (
-    MomentumSignalState, MeanReversionSignalState, ORBSignalState,
+    IntradayContinuationSignalState, MeanReversionSignalState,
+    MomentumSignalState, ORBSignalState,
 )
 
 # Maps strategy name → state class.  A fresh instance is created per run.
@@ -19,6 +21,7 @@ _SIGNAL_STATES: dict[str, type] = {
     "momentum": MomentumSignalState,
     "mean_reversion": MeanReversionSignalState,
     "orb": ORBSignalState,
+    "intraday_continuation": IntradayContinuationSignalState,
 }
 
 
@@ -43,6 +46,12 @@ class Trade:
     exit_mid: float | None = None     # bar.close before _exit_fill applies half-spread
     spread_at_entry: float | None = None  # spread_pts in effect when the entry was filled
     resolution: str | None = None     # bar resolution this trade was generated at, e.g. "M1", "M15"
+    # Per-bar trail-stop trace: appended on every in-trade bar AFTER the entry
+    # bar (the entry bar is skipped — matches live monitor semantics). Each
+    # entry is (bar_ts, stop_level_after_this_bar). Used by parity tests to
+    # assert engine ≡ live monitor across the full trail series, not just at
+    # the exit. Also useful for forensic analysis of trail behaviour.
+    stop_history: list[tuple[int, float]] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +108,11 @@ def run_backtest(
     kwargs = dict(signal_kwargs or {})
     if strategy == "mean_reversion":
         kwargs.setdefault("spread_pts", spread_pts)
+    if strategy == "intraday_continuation":
+        # Per-epic session-open UTC; pooled US500+DE40+UK100 each get their own.
+        h, m = session_open_utc(epic)
+        kwargs.setdefault("session_open_hour", h)
+        kwargs.setdefault("session_open_minute", m)
     signal_state = _SIGNAL_STATES[strategy](**kwargs)
 
     stop_pct = strategy_config["risk"]["stop_loss"]["default_pct"] / 100
@@ -141,6 +155,16 @@ def run_backtest(
             current_stop = entry_atr = peak_price = last_in_trade_bar = None
 
         if open_trade is not None:
+            # Skip evaluate_position on the entry bar — matches live monitor
+            # semantics (a live cycle sees a position only on the cycle AFTER
+            # its creation). Positional flag (last_in_trade_bar is None at
+            # entry; set on this bar so the *next* bar evaluates normally).
+            # Without this, the engine could fire ADJUST/CLOSE on bars the
+            # live monitor would never see, breaking per-bar parity.
+            if last_in_trade_bar is None:
+                last_in_trade_bar = bar
+                continue
+
             # Track best-favourable price for ATR trailing
             if open_trade.direction == "BUY":
                 peak_price = bar.high if peak_price is None else max(peak_price, bar.high)
@@ -161,6 +185,7 @@ def run_backtest(
                 signal_state=signal_state,
                 entry_atr=entry_atr,
                 peak_price=peak_price,
+                current_atr=getattr(signal_state, "atr", None),
             )
             if action == "CLOSE":
                 _close(open_trade, bar.ts, bar.close, reason)
@@ -170,6 +195,7 @@ def run_backtest(
                 if action == "ADJUST" and new_stop is not None:
                     current_stop = new_stop
                 last_in_trade_bar = bar
+                open_trade.stop_history.append((bar.ts, current_stop))
 
         elif signal is not None and i + 1 < len(bars):
             # --- Entry ---

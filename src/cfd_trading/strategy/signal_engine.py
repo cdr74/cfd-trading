@@ -20,6 +20,21 @@ back-fills a warm-up window then feeds one bar per cycle.
                              Stop at OR low (LONG) / OR high (SHORT) via get_entry_levels()
                              One signal per session; resets on each new session open
                              check_exit() → None (one-shot breakout; no reversal)
+  IntradayContinuationSignalState — Volatility-band intraday continuation
+                             (Zarattini-inspired, D3/BR3 — SYSTEM_DESIGN §3.7.1,
+                             CFD_STRATEGY_CATALOG §14). On M15:
+                             entry = first session bar whose CLOSE breaches
+                             `open ± k_entry · ATR₁₄(closed bars)`, direction =
+                             breach side; at most one entry/session.
+                             get_entry_levels() returns initial Chandelier-aligned
+                             hard stop (entry ∓ k_trail·ATR(entry)) and no TP.
+                             check_exit() → None (hold to close via the dynamic
+                             Chandelier trail + time-exit; no signal-reversal).
+
+The `chandelier_stop()` pure function below is the canonical formula shared by
+the backtest engine and the live monitor for the dynamic Chandelier trail mode
+(`trailing_stop.mode: dynamic_chandelier` in the strategy YAML). Both paths call
+this single function — parity by construction.
 
 Shared interface (all classes): `update(bar) -> "LONG"|"SHORT"|None`,
 `check_exit() -> reason|None`, `notify_entry(direction)`, `notify_exit()`.
@@ -499,6 +514,140 @@ class ORBSignalState:
     @property
     def atr(self) -> float | None:
         return None  # ORB has no ATR trailing (OR-width stop + fixed TP)
+
+
+class IntradayContinuationSignalState:
+    """Volatility-band intraday continuation (D3/BR3) — designed for M15.
+
+    Entry rule (CFD_STRATEGY_CATALOG §14):
+      1. Anchor to the session open price on the session-open bar.
+      2. Volatility band = open ± k_entry · ATR₁₄(closed bars), using the
+         engine's existing Wilder ATR primitive — one shared vol primitive,
+         fidelity-clean.
+      3. First session bar whose CLOSE breaches the band → entry in the breach
+         direction. At most one entry per session; resets at the next
+         session-open bar.
+
+    Exit is governed entirely by the shared exit path (SYSTEM_DESIGN §3.7):
+      hard stop → dynamic Chandelier trail → time-exit. No take-profit, no
+      signal-reversal exit ("hold to close" is the literature-faithful design).
+
+    Companion: the dynamic Chandelier trail in evaluate_position
+    (`trailing_stop.mode: dynamic_chandelier`) calls `chandelier_stop()` below
+    every bar — peak-anchored, ATR-recomputed, may loosen on vol expansion.
+
+    session_open_hour / session_open_minute (UTC): identify the first session
+    bar by checking bar.ts % 86400 == session_open_hour * 3600 + ... * 60.
+    DST is not accounted for — see backtest/sessions.py for the caveat.
+    """
+
+    def __init__(
+        self,
+        session_open_hour: int = 8,
+        session_open_minute: int = 0,
+        k_entry: float = 1.0,
+        k_trail: float = 1.5,
+        adx_period: int = 14,
+    ) -> None:
+        self._session_open_seconds = session_open_hour * 3600 + session_open_minute * 60
+        self._k_entry = k_entry
+        self._k_trail = k_trail
+        self._adx_state = _ADXState(adx_period)
+        self._session_day: int | None = None
+        self._session_open_price: float | None = None
+        self._traded: bool = False
+
+    def update(self, bar: OHLCBar) -> str | None:
+        """Consume one bar; return 'LONG', 'SHORT', or None."""
+        # ATR primitive advances on every closed bar — never reset per session.
+        self._adx_state.update(bar)
+
+        day = bar.ts // 86400
+        sod = bar.ts % 86400
+
+        # Session-open bar — anchor + clear traded flag
+        if sod == self._session_open_seconds:
+            self._session_open_price = bar.open
+            self._session_day = day
+            self._traded = False
+
+        if (self._session_day != day or self._session_open_price is None
+                or self._traded):
+            return None
+
+        atr = self._adx_state.atr
+        if atr is None:
+            return None
+
+        band = self._k_entry * atr
+        if bar.close > self._session_open_price + band:
+            self._traded = True
+            return "LONG"
+        if bar.close < self._session_open_price - band:
+            self._traded = True
+            return "SHORT"
+        return None
+
+    def get_entry_levels(
+        self, direction: str, fill_price: float, rr_ratio: float
+    ) -> tuple[float, float | None]:
+        """Initial Chandelier-aligned hard stop; no take-profit.
+
+        Stop sits at the same distance the dynamic trail will manage from —
+        entry ∓ k_trail · ATR(entry). The trail then maintains it from the
+        running extreme. `rr_ratio` is ignored (no TP — literature-faithful).
+        """
+        atr = self._adx_state.atr
+        if atr is None or atr == 0.0:
+            # Defensive fallback — signal can't fire with ATR unset, but be
+            # explicit. A 0.5% backstop is well inside the YAML max_pct.
+            backstop = fill_price * 0.005
+            distance = backstop
+        else:
+            distance = self._k_trail * atr
+        if direction == "BUY":
+            return round(fill_price - distance, 5), None
+        return round(fill_price + distance, 5), None
+
+    def check_exit(self) -> str | None:
+        return None  # hold to close — trail + time-exit govern the exit
+
+    def notify_entry(self, direction: str) -> None:
+        pass
+
+    def notify_exit(self) -> None:
+        pass
+
+    @property
+    def atr(self) -> float | None:
+        """Wilder ATR(14) over closed bars — used by both entry band and trail."""
+        return self._adx_state.atr
+
+
+# ---------------------------------------------------------------------------
+# Chandelier trail — canonical pure function shared by engine + monitor
+# ---------------------------------------------------------------------------
+
+def chandelier_stop(
+    direction: str, extreme: float, current_atr: float, k_trail: float
+) -> float:
+    """Dynamic Chandelier stop level — peak-anchored, ATR-recomputed.
+
+      LONG  stop = extreme − k_trail · current_atr   (extreme = max_high_since_entry)
+      SHORT stop = extreme + k_trail · current_atr   (extreme = min_low_since_entry)
+
+    "Dynamic" = `current_atr` is recomputed from closed bars every evaluation,
+    so the stop level may move away from price when volatility expands. This is
+    the literature-faithful (Zarattini/BR4) trail, distinct from the
+    ratchet-only fixed-at-entry ATR trail used by momentum (mode: fixed_atr).
+
+    Backtest engine and live monitor BOTH call this function — one source of
+    truth for the dynamic_chandelier trail mode. See SYSTEM_DESIGN §3.7.1.
+    """
+    distance = k_trail * current_atr
+    if direction == "BUY":
+        return round(extreme - distance, 5)
+    return round(extreme + distance, 5)
 
 
 # ---------------------------------------------------------------------------

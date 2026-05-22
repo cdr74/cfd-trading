@@ -1,0 +1,33 @@
+# KILLED 2026-05-21 — failed OOS DSR / CI / cost gates. Do not deploy.
+# Verdict + run artefacts: docs/STRATEGY_AUDIT.md Part 2 → "Task #7 — Run + verdict".
+# Retained as historical record; the implementation is correct (kill is on
+# OOS performance, not code). Universe in the actual run was US500+DE40
+# only (UK100 dropped pre-run — see STRATEGY_AUDIT amendment).
+name: intraday_continuation
+description: "[KILLED 2026-05-21] Volatility-band intraday continuation (Zarattini-inspired, D3/BR3) — first M15 session bar closing outside open ± 1.0·ATR₁₄; dynamic Chandelier trail; no TP; hold-to-close. See CFD_STRATEGY_CATALOG §14, SYSTEM_DESIGN §3.7.1, STRATEGY_AUDIT.md Part 2."
+resolution: M15        # M15 is the spec — M1/M5 ruled out (D1 cost anchor). Source of truth for live monitor + backtest.
+
+entry:
+  min_size: 0.1
+  max_size: 5.0
+
+risk:
+  target_risk_pct: 1.0
+  stop_loss:
+    type: HARD
+    default_pct: 5.0           # backstop only — get_entry_levels() sets entry stop = entry ∓ 1.5·ATR(entry)
+    max_pct: 5.0
+  trailing_stop:
+    enabled: true
+    mode: dynamic_chandelier   # per-bar Chandelier recompute; MAY loosen on vol expansion (SYSTEM_DESIGN §3.7.1)
+    atr_multiplier: 1.5        # k_trail — reuses the existing trail multiple
+  take_profit:
+    dynamic: false             # no TP — "hold to close" (literature-faithful Zarattini design)
+    min_rr_ratio: 0            # required by schema; ignored — get_entry_levels() returns profit_level=None
+  position_scaling:
+    enabled: false
+    max_adds: 0
+    max_total_size: 5.0
+  time_exit:
+    enabled: true
+    close_minutes_before_session_end: 30   # backstop; the global 21:00 UTC session close governs in practice

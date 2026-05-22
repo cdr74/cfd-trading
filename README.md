@@ -45,6 +45,7 @@ MCP endpoints: `https://localhost:8089/mcp` (cfd-trading) · `https://localhost:
 
 ## Status
 
-**Infrastructure: complete and tested** — 329 unit tests passing, both MCP servers run as Podman containers, end-to-end smoke tests (SM-01–SM-11) passed, backtesting framework rebuilt and operational (`docs/BACKTESTING.md`).
 
-**Strategy: none deployable.** The Phase A audit closed 2026-05-18 on the kill-criterion — no validated edge in any strategy (`mean_reversion` dropped; `momentum` & `ORB` unvalidated). The project is at a strategic decision point; the next phase is the strategy debate in [`docs/STRATEGY_AUDIT.md`](docs/STRATEGY_AUDIT.md) Part 2. No new strategy is built before that concludes.
+**Infrastructure: complete and tested** — 346 unit tests passing, both MCP servers run as Podman containers, end-to-end smoke tests (SM-01–SM-11) passed, backtesting framework rebuilt and operational (`docs/BACKTESTING.md`).
+
+**Strategy: none deployable.** The Phase A audit closed 2026-05-18 on the kill-criterion — no validated edge in `mean_reversion` (dropped), `momentum` or `ORB` (unvalidated). Part 2's Fork A test — `intraday_continuation` (D3/BR3, Zarattini-inspired volatility-band continuation with a dynamic Chandelier trail) — was implemented, pre-registered, run, and **killed 2026-05-21** on OOS DSR/CI/cost gates. Next-phase forks (B: different horizon, C: lower-cost venue, D: Claude-as-co-pilot only) are open per [`docs/STRATEGY_AUDIT.md`](docs/STRATEGY_AUDIT.md) Part 2.

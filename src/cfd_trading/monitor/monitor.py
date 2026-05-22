@@ -14,7 +14,8 @@ from typing import Optional
 
 from cfd_trading.storage.repository import OHLCBar
 from cfd_trading.strategy.signal_engine import (
-    MeanReversionSignalState, MomentumSignalState,
+    IntradayContinuationSignalState, MeanReversionSignalState,
+    MomentumSignalState, chandelier_stop,
 )
 
 logger = logging.getLogger("monitor")
@@ -42,6 +43,7 @@ def evaluate_position(
     signal_state=None,
     entry_atr: Optional[float] = None,
     peak_price: Optional[float] = None,
+    current_atr: Optional[float] = None,
 ) -> tuple[str, str, Optional[float]]:
     """
     Evaluate exit conditions for a single open position.
@@ -59,11 +61,22 @@ def evaluate_position(
                       now=None is byte-for-byte unchanged.
     signal_state    — shared signal_engine state for rule 4 (signal-exit). None
                       → rule 4 skipped (price/time-only behaviour preserved).
-    entry_atr       — ATR(14) captured at entry; with trailing_stop.atr_multiplier
-                      enables fixed-distance ATR trailing (rule 2). None → the
-                      legacy fixed-% trailing path is used.
+    entry_atr       — ATR(14) captured at entry; used by the `fixed_atr` trail
+                      mode (ratchet-only, fixed distance for the trade).
     peak_price      — best favourable price since entry (caller-tracked);
                       required for ATR trailing.
+    current_atr     — ATR(14) recomputed for the current bar; used by the
+                      `dynamic_chandelier` trail mode (may loosen on vol
+                      expansion).
+
+    Trail mode dispatch (`risk.trailing_stop.mode` in the strategy YAML):
+      • `fixed_atr`        — distance = atr_multiplier × entry_atr, ratchet-only
+      • `dynamic_chandelier` — distance = atr_multiplier × current_atr from
+                                running extreme; MAY loosen (literature-faithful,
+                                SYSTEM_DESIGN §3.7.1)
+      • `fixed_pct`        — distance = min_distance_pct × bid/ask, ratchet-only
+      • absent             — defaults to `fixed_atr` if atr_multiplier is set,
+                                else `fixed_pct` (back-compat)
 
     Priority: 1 hard stop → 2 trailing → 3 take-profit → 4 signal-exit
     → 5 time-exit → HOLD.
@@ -89,16 +102,35 @@ def evaluate_position(
         if direction == "SELL" and ask >= stop_level:
             return "CLOSE", f"Hard stop: ask {ask} >= stop {stop_level}", None
 
-    # 2. Trailing stop ratchet (ratchet-only — never widens)
+    # 2. Trailing stop — mode-dispatched (fixed_atr | dynamic_chandelier | fixed_pct)
     ts_config = strategy_config.get("risk", {}).get("trailing_stop", {})
     if ts_config.get("enabled") and stop_level is not None:
         atr_mult = ts_config.get("atr_multiplier")
-        if atr_mult is not None:
-            # ATR trailing is configured → ATR-only. Never silently fall back to
-            # fixed-% (that would be live↔backtest drift). If entry_atr / peak
-            # are unavailable this cycle, simply do not trail.
-            if entry_atr is not None and peak_price is not None:
-                # distance fixed at entry = atr_multiplier × ATR₁₄(entry)
+        # Mode default: fixed_atr if atr_multiplier is set, else fixed_pct (back-compat)
+        mode = ts_config.get("mode") or ("fixed_atr" if atr_mult is not None else "fixed_pct")
+
+        if mode == "dynamic_chandelier":
+            # Per-bar Chandelier — peak-anchored, current_atr recomputed each
+            # bar. MAY loosen on vol expansion (SYSTEM_DESIGN §3.7.1). Uses
+            # the shared chandelier_stop() pure function — engine + monitor
+            # parity by construction.
+            if (atr_mult is not None and current_atr is not None
+                    and peak_price is not None):
+                candidate = chandelier_stop(direction, peak_price, current_atr, atr_mult)
+                if abs(candidate - stop_level) > 1e-9:
+                    arrow = "↑" if candidate > stop_level else "↓"
+                    return (
+                        "ADJUST",
+                        f"Chandelier {direction} {arrow}: {stop_level} → {candidate} "
+                        f"(peak={peak_price}, atr={current_atr:.5f}×{atr_mult})",
+                        candidate,
+                    )
+
+        elif mode == "fixed_atr":
+            # ATR trailing fixed-at-entry — ratchet-only (legacy momentum path).
+            # If entry_atr / peak are unavailable this cycle, simply do not trail
+            # (never silently fall back to fixed-% — that would be live↔backtest drift).
+            if entry_atr is not None and peak_price is not None and atr_mult is not None:
                 distance = atr_mult * entry_atr
                 if direction == "BUY":
                     candidate = round(peak_price - distance, 5)
@@ -118,7 +150,8 @@ def evaluate_position(
                             f"(peak={peak_price}, dist={distance:.5f}=ATR{entry_atr:.5f}×{atr_mult})",
                             candidate,
                         )
-        elif bid is not None and ask is not None:
+
+        elif mode == "fixed_pct" and bid is not None and ask is not None:
             distance_pct = ts_config.get("min_distance_pct", 1.0)
             if direction == "BUY":
                 candidate = round(bid * (1 - distance_pct / 100), 5)
@@ -195,15 +228,32 @@ def _write_audit(audit_path: Path, entry: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-position signal-engine state (3c) — momentum & mean_reversion only.
-# ORB needs no state (check_exit→None, trailing disabled); it uses the
-# price/time rules of evaluate_position exactly as before.
+# Per-position signal-engine state — strategies whose exit path needs streaming
+# state in the monitor. ORB has no state (check_exit→None, trailing disabled).
+# intraday_continuation needs state for the dynamic Chandelier trail's
+# current_atr (recomputed from closed bars each cycle).
 # ---------------------------------------------------------------------------
 
 _SIGNAL_CLS = {
     "momentum": MomentumSignalState,
     "mean_reversion": MeanReversionSignalState,
+    "intraday_continuation": IntradayContinuationSignalState,
 }
+
+
+def _signal_kwargs_for(strategy_name: str, epic: str) -> dict:
+    """Per-strategy/per-epic signal_state ctor kwargs.
+
+    `intraday_continuation` needs the per-epic session_open (UTC) to identify
+    the session-open bar — pooled US500+DE40+UK100 evaluates on each instrument
+    with its own session open. Defaults to (8, 0) for unknown epics, matching
+    `backtest/sessions.session_open_utc`.
+    """
+    if strategy_name == "intraday_continuation":
+        from cfd_trading.backtest.sessions import session_open_utc
+        h, m = session_open_utc(epic)
+        return {"session_open_hour": h, "session_open_minute": m}
+    return {}
 _RES_CODE = {"M1": "MINUTE", "M5": "MINUTE_5", "M15": "MINUTE_15",
              "M30": "MINUTE_30", "M60": "HOUR", "H1": "HOUR"}
 _RES_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800,
@@ -277,7 +327,7 @@ def _warmup_state(client, epic: str, strategy, direction: str,
     if len(bars) < 5:
         logger.warning(f"warmup: too few bars for {epic} ({len(bars)})")
         return None
-    st = cls()
+    st = cls(**_signal_kwargs_for(strategy.name, epic))
     entry_atr: Optional[float] = None
     peak = entry_price
     entered = False
@@ -370,6 +420,10 @@ def run_cycle(
                     ps.last_bar_ts = b.ts
             sig_state, entry_atr, peak_price = (
                 ps.signal_state, ps.entry_atr, ps.peak_price)
+        # current_atr — recomputed from closed bars each cycle; powers the
+        # dynamic_chandelier trail mode. Strategies without an .atr property
+        # (e.g. ORB) yield None, leaving the dispatch a no-op.
+        current_atr = getattr(sig_state, "atr", None) if sig_state is not None else None
 
         # Current bid/ask from the latest raw bar's close
         last_raw = raw[-1]
@@ -384,6 +438,7 @@ def run_cycle(
             signal_state=sig_state,
             entry_atr=entry_atr,
             peak_price=peak_price,
+            current_atr=current_atr,
         )
 
         logger.info(f"{epic} ({deal_id[:8]}…) → {action}: {reason}")
