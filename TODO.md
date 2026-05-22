@@ -14,7 +14,7 @@ history — this file no longer tracks it.
 > strategy debate: **`docs/STRATEGY_AUDIT.md`**. Reproducibility:
 > `analysis/audit_archive/`. **No new strategy is built before that debate
 > concludes (discuss-before-implement).**
->
+
 > **Update 2026-05-22 — D2 is the active thread.** Fork A (D3/BR3) KILLED
 > 2026-05-21. **D2 (news-proximity drift) pre-registration is LOCKED** and its
 > data-feasibility recon PASSED: ForexFactory historical scrape via
@@ -23,6 +23,7 @@ history — this file no longer tracks it.
 > winter/EST week) → build the FF scraper → pooled standardized-surprise
 > backtest. Full spec: `docs/STRATEGY_AUDIT.md` Part 2; data sub-task:
 > `analysis/d2_news/README.md`.
+
 
 The forward agenda lives in `docs/STRATEGY_AUDIT.md` Part 2 (threads D1–D5,
 carried-forward guardrails, the D1 cost anchor), **not here**. The items below
