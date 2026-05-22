@@ -7,6 +7,9 @@ data/
 *.db
 *.jsonl
 
+# Raw scraped calendar HTML — bulky third-party content, regenerable
+analysis/d2_news/*.html
+
 # Python
 __pycache__/
 *.pyc

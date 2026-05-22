@@ -135,7 +135,7 @@ traditional retail-CFD mechanical edge is winnable here at all → Part 2.
 
 ---
 
-## Part 2 — Strategy Debate (D3 closed 2026-05-21; D1/D2/D4 open)
+## Part 2 — Strategy Debate (D3 closed 2026-05-21; D2 pre-registered 2026-05-22, pre-build; D1/D4 open)
 
 The pivot. Fork A (D3/BR3 — Zarattini-inspired volatility-band intraday
 continuation) was tested and **killed 2026-05-21** (see "Task #7 — Run +
@@ -151,7 +151,32 @@ thread concludes.
 - **D2 — News-proximity / event-driven (was audit A4).** Post-news drift as a
   distinct strategy class: ForexFactory historical calendar, timezone
   validation, surprise-threshold entries, hours-not-seconds horizon. Was
-  deferred behind D3; **now unblocked but unrun.**
+  deferred behind D3; **GREEN for deep dive (decided 2026-05-22)** — proceed to
+  the full proper-data build + pre-registered backtest. **MT5 built-in-calendar
+  shortcut probed & closed** (`analysis/d2_probe/`, 2026-05-22): it is *not* the
+  data source. Findings: depth full to 2023-05 and ~1600 pooled high-impact
+  sample, but coverage is **USD-rich / non-USD bare** (US ≈30 numeric-consensus
+  events incl. NFP/CPI/PCE/GDP/ISM; EU just HICP CPI; **DE40 essentially
+  uncovered** — German GDP only; GB/JP = GDP+CPI), and **no FOMC/ECB/BoE/BoJ
+  rate decision carries a numeric consensus** (they fall in the speech/no-forecast
+  bucket — US 252, EU 309). A verdict built on that slice would be the marginal-
+  observation chase + risks a false negative. → Deep dive uses the
+  **ForexFactory historical scrape (DECIDED 2026-05-22)** — the audit's
+  originally-specified source; paid feeds (Trading Economics / Econoday)
+  considered and set aside — full cross-asset coverage (carries actual /
+  forecast=consensus / previous + impact colour for high-impact events),
+  timezone-validated to the OHLC bars. Guardrail: the
+  same gates that killed D3/BR3 still bind — pooled standardized-surprise (never
+  per-event cells), post-cost vs the D1 anchor, deflated Sharpe, pre-registered
+  OOS — and the data-acquisition scope is bounded + pre-registered *before* the
+  first backtest. A clean "data-blocked / not worth the build" remains a
+  legitimate outcome. Build effort ≈ D3/BR3 (real, not an afternoon probe).
+  **Pre-registration LOCKED 2026-05-22 (pre-build)** — full spec + kill
+  protocol in "D2 — News-proximity drift: pre-registration" below. Resolved:
+  hybrid direction rule (surprise gates |z|≥1.0, first-reaction-bar sets sign),
+  M15 / hold ~2–4 h, 7-instrument universe (UK100 dropped — M15 depth starts
+  post-OOS-boundary; GBP retained via FX legs). Next code step = FF scrape +
+  the timezone-validation gate (itself the first kill checkpoint).
 - **D3 — Literature-led direction (Zarattini-inspired volatility-band
   intraday continuation, BR3 variant).** **CLOSED 2026-05-21 — KILLED on
   pre-registered OOS gates.** Full record: "Task #7 — Run + verdict" below.
@@ -516,6 +541,87 @@ already-failed family. **No further D3 variants.**
    no "let's just try k_trail=2.5" detour. The kill verdict applies to
    a single pre-registered run with all parameters frozen — the cleanest
    possible kill record.
+
+### D2 — News-proximity drift: pre-registration (locked 2026-05-22, pre-build)
+
+**This section is the pre-registration.** It freezes scope, signal, and kill
+protocol BEFORE any scrape/backtest code (CLAUDE.md §1 + the standing
+[[deflated-sharpe-min-sample]] gate). No post-hoc adjustment; a later
+methodology change invalidates the run and requires re-pre-registration.
+Same discipline that gave D3/BR3 its clean kill.
+
+**Hypothesis (one line).** A large standardized macro surprise is followed by
+an hours-scale *continuation* drift in the affected instrument, large enough to
+clear realized CFD round-trip cost.
+
+**1. Data source & feasibility gate.**
+- **Source: ForexFactory historical scrape (decided 2026-05-22).** Carries
+  actual / forecast(=consensus) / previous + impact colour, incl. rate
+  decisions — the gap that disqualified the MT5 built-in calendar (probed &
+  closed 2026-05-22, `analysis/d2_probe/`: USD-rich, non-USD bare, no
+  rate-decision consensus). Paid feeds (Trading Economics / Econoday)
+  considered and set aside.
+- **Timezone gate — FIRST kill checkpoint, before any backtest.** Recon
+  (2026-05-22) found each FF event carries `dateline` = a **raw UTC epoch**
+  (not a display-formatted time), so there is no display-tz to misparse — read
+  the epoch directly. Validate against ≥5 known releases across the window
+  (incl. one winter/EST + one summer/EDT week to confirm DST is handled by the
+  epoch) landing on the expected reaction bar. Anchor: NFP = 8:30 ET (=12:30
+  UTC EDT / 13:30 UTC EST). First-week recon PASSED — NFP 2025-05-02 decoded to
+  12:30 UTC exactly. **Fail = D2 data-blocked** the way XBRUSD blocked
+  Lundström's oil; no build proceeds.
+
+**2. Data window & split — mirrors D3.**
+- **Window:** 2023-05-15 → 2026-05-14 (M15 OHLC depth in `trading.db`).
+- **OOS split:** 67/33 by calendar time, **boundary 2025-01-21** (same as D3 /
+  §5 ORB precedent). IS = 2023-05-15 → 2025-01-21; OOS = 2025-01-21 → 2026-05-14.
+
+**3. Universe — 7 instruments, news-currency-mapped.**
+- **US500, DE40, GOLD, EURUSD, GBPUSD, USDJPY, EURGBP** — all full-depth M15.
+- **UK100 DROPPED (data-forced, 2026-05-22):** its M15 history starts 2025-07-09
+  — entirely *after* the OOS boundary, zero in-sample bars; including it would
+  bias the OOS cell and break IS/OOS symmetry (the D3 UK100 problem, confirmed
+  in DB). GBP coverage is retained via GBPUSD/EURGBP (FX legs), so only the UK
+  equity-index leg is lost. Reversible only by moving to H1 (5 yr depth) —
+  explicitly not done; M15 chosen for finer entry timing.
+- **Mapping:** USD events → US500, GOLD + USD legs (EURUSD/GBPUSD/USDJPY);
+  EUR → DE40 + EUR legs (EURUSD/EURGBP); GBP → GBP legs (GBPUSD/EURGBP);
+  JPY → USDJPY.
+
+**4. Event filter & surprise metric.**
+- FF **high-impact ("red") only**, must carry a `forecast` (so surprise is
+  computable). Rate decisions included. No-forecast speeches excluded.
+- **Standardized surprise** z = (actual − forecast) ÷ σ(that event series'
+  historical surprises). **Pooled standardized-surprise — never per-event
+  cells** (blocker (i): per-cell ≈10–12 trades/3 yr = the §5 thin-cell trap).
+- **Entry threshold |z| ≥ 1.0**, single pinned value — no k-grid search, to
+  keep the DSR multiplicity penalty minimal (the D3 k_entry discipline).
+
+**5. Direction rule — hybrid (gate by surprise, sign by reaction).**
+- A qualifying event (|z| ≥ 1.0) arms the instrument. **Direction = the sign of
+  the first post-release M15 bar's reaction**; enter at the *next* bar's open
+  (the reaction bar must close first — no look-ahead). Rationale: the
+  economic-surprise→index sign is regime-dependent and fragile; reading the sign
+  from the market's own initial reaction is robust and instrument-agnostic while
+  staying news-conditioned.
+- **Horizon:** M15 bars, hold ~2–4 h (exact holding-bar count frozen at build
+  time, not tuned). Exit + cost via the rebuilt engine's shared deterministic
+  path; realized-cost model = one `spread_at_entry` round-trip per class
+  (Index 0.753 / FX 0.835 / Commodity 1.280 bps).
+
+**6. Gates (mirror D3's four) + kill protocol.**
+- (a) DSR P < 0.05; (b) 95% bootstrap CI lower bound > 0; (c) net post-cost
+  return > the D1 cost hurdle; (d) min-sample ≥ ~100 pooled OOS trades
+  (Bailey/LdP floor). Pre-kill introspection before any verdict (the protocol
+  that caught the D3 analysis-script cost bug). A clean "data-blocked / no edge
+  / not worth the build" is a legitimate outcome.
+
+**Build sequence (design-docs-before-code, CLAUDE.md §1):** (a) FF scrape +
+timezone-validation gate (§1 above — first kill checkpoint); (b) surprise
+standardization + pooled dataset build; (c) signal/entry/exit wired onto the
+rebuilt engine, reusing the shared exit path + parity test; (d) freeze the
+holding-bar count, then run against the §6 gates. No instrument or threshold
+mining at any step.
 
 ### D1 anchor — the cost reality (quantified)
 
