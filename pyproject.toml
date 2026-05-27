@@ -22,6 +22,13 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+# Offline research/data-acquisition tooling (analysis/). NOT shipped in the
+# runtime trading container — keeps the Cloudflare-bypass + dataframe libs out
+# of the served image. Install with: pip install -e ".[analysis]"
+analysis = [
+    "cloudscraper>=1.2",
+    "pandas>=2.0",
+]
 
 [project.scripts]
 cfd-trading = "cfd_trading.server:main"

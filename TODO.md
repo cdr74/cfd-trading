@@ -15,14 +15,20 @@ history — this file no longer tracks it.
 > `analysis/audit_archive/`. **No new strategy is built before that debate
 > concludes (discuss-before-implement).**
 
-> **Update 2026-05-22 — D2 is the active thread.** Fork A (D3/BR3) KILLED
-> 2026-05-21. **D2 (news-proximity drift) pre-registration is LOCKED** and its
-> data-feasibility recon PASSED: ForexFactory historical scrape via
-> `cloudscraper`, per-event `dateline` = UTC epoch (timezone gate first anchor
-> cleared — NFP → 12:30 UTC). **Next:** finish the tz-gate anchors (incl. a
-> winter/EST week) → build the FF scraper → pooled standardized-surprise
-> backtest. Full spec: `docs/STRATEGY_AUDIT.md` Part 2; data sub-task:
-> `analysis/d2_news/README.md`.
+> **Update 2026-05-26 — D2 (news-proximity drift) KILLED.** The full build ran
+> end to end — TZ gate PASSED (5 NFP anchors, both DST states) → 157-week
+> ForexFactory scrape (1966 events) → prior-only expanding-σ standardization
+> (no look-ahead, |z|≥1.0) → pooled backtest over a pre-registered {1,3,5 h}
+> horizon grid (918 trades/horizon). **Fails all gates by structural margin:**
+> OOS SR̂ −0.038…−0.028, DSR P≈0, best net +0.55 bps vs ~2.68 bps cost hurdle,
+> CI lower negative at every horizon; the {1,3,5 h} profile is a dead flat-line,
+> not a plateau. Introspection clean (no bug; fade also negative = no edge
+> either way). 4th family with no validated post-cost edge; both Part 2 forks
+> (D3, D2) died at the M15 intraday cost-tax. Code retained as reusable
+> event-driven infrastructure (`analysis/d2_news/`). Verdict + numbers:
+> `docs/STRATEGY_AUDIT.md` Part 2 → "D2 — Run + verdict" and
+> `analysis/d2_news/d2_run_2026-05-26.md`. **No active coding thread** — open
+> agenda (forks B/C/D, D1) is discuss-before-implement.
 
 
 The forward agenda lives in `docs/STRATEGY_AUDIT.md` Part 2 (threads D1–D5,

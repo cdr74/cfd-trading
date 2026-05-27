@@ -135,7 +135,7 @@ traditional retail-CFD mechanical edge is winnable here at all → Part 2.
 
 ---
 
-## Part 2 — Strategy Debate (D3 closed 2026-05-21; D2 pre-registered 2026-05-22, pre-build; D1/D4 open)
+## Part 2 — Strategy Debate (D3 closed 2026-05-21; D2 closed/KILLED 2026-05-26; D1/D4 open)
 
 The pivot. Fork A (D3/BR3 — Zarattini-inspired volatility-band intraday
 continuation) was tested and **killed 2026-05-21** (see "Task #7 — Run +
@@ -567,9 +567,13 @@ clear realized CFD round-trip cost.
   the epoch directly. Validate against ≥5 known releases across the window
   (incl. one winter/EST + one summer/EDT week to confirm DST is handled by the
   epoch) landing on the expected reaction bar. Anchor: NFP = 8:30 ET (=12:30
-  UTC EDT / 13:30 UTC EST). First-week recon PASSED — NFP 2025-05-02 decoded to
-  12:30 UTC exactly. **Fail = D2 data-blocked** the way XBRUSD blocked
-  Lundström's oil; no build proceeds.
+  UTC EDT / 13:30 UTC EST). **GATE PASSED 2026-05-26** (`analysis/d2_news/tz_gate.py`):
+  5 NFP anchors spanning the window — jun2.2023, jan5.2024, jul5.2024, may2.2025
+  (recon), jan9.2026 — each decoded epoch → America/New_York lands on 08:30 ET
+  exactly, with both winter/EST weeks at 13:30 UTC and both summer/EDT weeks at
+  12:30 UTC. DST is provably carried by the epoch in both directions; no
+  display-tz parsing needed. **Fail would have meant D2 data-blocked** the way
+  XBRUSD blocked Lundström's oil — but it cleared, so the build proceeds.
 
 **2. Data window & split — mirrors D3.**
 - **Window:** 2023-05-15 → 2026-05-14 (M15 OHLC depth in `trading.db`).
@@ -604,17 +608,35 @@ clear realized CFD round-trip cost.
   economic-surprise→index sign is regime-dependent and fragile; reading the sign
   from the market's own initial reaction is robust and instrument-agnostic while
   staying news-conditioned.
-- **Horizon:** M15 bars, hold ~2–4 h (exact holding-bar count frozen at build
-  time, not tuned). Exit + cost via the rebuilt engine's shared deterministic
-  path; realized-cost model = one `spread_at_entry` round-trip per class
+- **Horizon:** M15 bars. **AMENDED 2026-05-26 (pre-run, still blind to
+  results):** the single-frozen-count rule is replaced by a **pre-registered
+  3-point horizon grid — {1 h, 3 h, 5 h} = {4, 12, 20 bars}** — run together
+  and judged as a robustness profile, not a value to optimise over. Rationale
+  (user, 2026-05-26): a single blind pin trades selection bias for the sampling
+  variance of one arbitrary draw and can mislead either way; a real edge should
+  show a *plateau* across a sensible horizon band while an overfit shows a
+  *spike*. Honesty is preserved by bookkeeping, not abstinence: the grid is
+  declared in advance, the DSR is **deflated for 3 trials** (coarse,
+  economically-spaced points — small penalty, not a fine-grid spike-hunt), and
+  the decision rule below is committed before any result is seen.
+  **Decision rule (pre-committed):** edge is claimed only if the profile is
+  **positive and smooth across all three horizons** (consistent sign, no lone
+  spike) AND the §6 gates hold (DSR-deflated-for-3 P<0.05, CI lower>0, net>cost
+  hurdle, ≥~100 pooled OOS trades). A spiky profile (one horizon good, the
+  others dead) is a *fail* signature — not a menu to cherry-pick from. No
+  finer horizon search beyond these three points.
+  Exit + cost via the rebuilt engine's shared deterministic path;
+  realized-cost model = one `spread_at_entry` round-trip per class
   (Index 0.753 / FX 0.835 / Commodity 1.280 bps).
 
 **6. Gates (mirror D3's four) + kill protocol.**
-- (a) DSR P < 0.05; (b) 95% bootstrap CI lower bound > 0; (c) net post-cost
+- (a) DSR P < 0.05 — **deflated for the 3 horizon trials** (per the §5
+  amendment); (b) 95% bootstrap CI lower bound > 0; (c) net post-cost
   return > the D1 cost hurdle; (d) min-sample ≥ ~100 pooled OOS trades
-  (Bailey/LdP floor). Pre-kill introspection before any verdict (the protocol
-  that caught the D3 analysis-script cost bug). A clean "data-blocked / no edge
-  / not worth the build" is a legitimate outcome.
+  (Bailey/LdP floor); **(e) robustness — the {1,3,5 h} profile positive and
+  smooth, no lone spike (§5 decision rule).** Pre-kill introspection before any
+  verdict (the protocol that caught the D3 analysis-script cost bug). A clean
+  "data-blocked / no edge / not worth the build" is a legitimate outcome.
 
 **Build sequence (design-docs-before-code, CLAUDE.md §1):** (a) FF scrape +
 timezone-validation gate (§1 above — first kill checkpoint); (b) surprise
@@ -622,6 +644,66 @@ standardization + pooled dataset build; (c) signal/entry/exit wired onto the
 rebuilt engine, reusing the shared exit path + parity test; (d) freeze the
 holding-bar count, then run against the §6 gates. No instrument or threshold
 mining at any step.
+
+### D2 — Run + verdict: **KILLED 2026-05-26**
+
+The full build ran clean through all four steps and the strategy **fails by
+structural margin**. Code retained as historical record (FF scraper, surprise
+standardiser, news backtest harness — reusable for any future event-driven
+work). Reproducibility: `analysis/d2_news/` (scrape → `d2_signals.parquet` →
+`d2_run_2026-05-26.parquet`), gate math imported verbatim from
+`audit/d3_analyze.py`, report `analysis/d2_news/d2_run_2026-05-26.md`.
+
+**Pipeline as built (matches pre-registration):** TZ gate PASSED (5 NFP anchors,
+both DST states) → 157-week FF scrape (1966 high-impact+forecast events,
+~99% parsed) → prior-only expanding-σ standardisation (warmup≥8, no look-ahead,
+|z|≥1.0) → 267 armed events → 1136 candidate (event,instrument) signals →
+deduped on (instrument, reaction bar) + 10 flat-reaction drops → **918 pooled
+trades/horizon (443 IS / 475 OOS)**. Fidelity: bars via the engine's own
+`get_bars`; entry = next bar open after the reaction bar closes (no look-ahead);
+cost = pre-registered per-class round-trip; construction spot-checked against
+raw bars (no defect, no sign error — fade nets −2.34 bps, so the rule isn't
+backwards, there is simply no edge either way).
+
+**Pooled OOS gate results (K_trials=124 = audit 121 + 3 D2 horizons):**
+
+| horizon | OOS N | SR̂ | DSR P | 95% CI | net bps | hurdle | gates |
+|---|--:|--:|--:|--:|--:|--:|---|
+| 1 h | 475 | −0.038 | ~0.00 | [−0.108,+0.071] | −0.762 | 2.68 | DSR✗ CI✗ cost✗ minN✓ |
+| 3 h | 475 | −0.028 | ~0.00 | [−0.076,+0.038] | +0.551 | 2.68 | DSR✗ CI✗ cost✗ minN✓ |
+| 5 h | 475 | −0.033 | ~0.00 | [−0.106,+0.050] | +0.138 | 2.68 | DSR✗ CI✗ cost✗ minN✓ |
+
+**Kill rationale (one paragraph):** Across the entire pre-registered {1,3,5 h}
+horizon grid, OOS SR̂ is negative (−0.038…−0.028) — ~5–10× short of clearing the
+deflated-Sharpe bar; best OOS net (+0.55 bps, 3 h) is ~5× short of the ~2.68 bps
+3×-cost hurdle and 1 h is outright negative; the 95% CI lower bound is negative
+at every horizon. Gate (e) robustness fails on its own terms — the profile is a
+**dead flat-line, not a plateau** (OOS net not even positive at all three
+points), which is the pre-committed fail signature, not a spike to mine.
+Pre-kill introspection was clean: construction verified against raw bars, no
+cost-calc or sign defect. The per-instrument diagnostic shows USDJPY (+6.2 bps,
+PF 1.98, n=77) and GOLD (+2.7 bps) looking attractive, but the **pre-registered
+unit of analysis is the pool**, and slicing to a 77-trade USDJPY cell is exactly
+the thin-cell trap closed in Phase A §5 — explicitly **not** rescued. D2 is the
+fourth family with no validated post-cost edge (after mean_reversion dropped,
+momentum/ORB unvalidated, D3/BR3 killed). Methodology held end to end: grid
+pre-declared and DSR-deflated, no parameter mining, no post-hoc cell rescue.
+
+**Transferable D2 learnings:**
+1. The reaction-continuation hypothesis (let the market's first post-release bar
+   set direction) has no exploitable edge net of CFD cost at M15 — confirmed
+   symmetric (fade is also negative), so it's an absence of signal, not a sign
+   error.
+2. Prior-only expanding-σ standardisation worked as designed; the warmup≥8
+   choice cost ~27% of events but removed all look-ahead in the arming
+   threshold — a clean, reusable event-study standardiser.
+3. The horizon-grid amendment (vs a single frozen value) added robustness
+   evidence at a small DSR cost and made the "no plateau" conclusion stronger
+   than a single point could have. Pre-registering a *grid* + decision rule is
+   as honest as pre-registering a scalar, and more informative.
+4. News-day concurrency matters: simultaneous releases (the 12:30 USD cluster)
+   must collapse to one trade per reaction bar or N is fabricated — handled by
+   (instrument, reaction-bar) dedup.
 
 ### D1 anchor — the cost reality (quantified)
 
